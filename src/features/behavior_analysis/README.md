@@ -1,14 +1,14 @@
 # Behavior Analysis Feature
 
 ## Purpose
-Phát hiện hành vi bất thường.
+Detect abnormal behavior patterns.
 
 ## Features
 - Loitering detection (dwell time tracking)
 - Shoplifting pattern (pose + hand-to-pocket)
 - Running detection
 - Anomaly detection (ML-based)
-- Alert escalation theo severity
+- Alert escalation by severity
 - Video clip evidence capture
 
 ## Dependencies

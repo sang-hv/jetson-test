@@ -1,7 +1,7 @@
 # Demographics Analysis Feature
 
 ## Purpose
-Phân tích nhân khẩu học khách hàng.
+Analyze customer demographics for business insights.
 
 ## Features
 - Age estimation model
@@ -9,16 +9,16 @@ Phân tích nhân khẩu học khách hàng.
 - Face detection preprocessing
 - Demographics aggregation
 - Dashboard charts (age groups, gender ratio, trends)
-- Privacy compliance (không lưu ảnh)
+- Privacy compliance (no image storage)
 
 ## Dependencies
 - `ai_core.recognition` - Face detection, age/gender estimation
 - `storage` - Statistics storage
 
 ## Privacy
-- Chỉ lưu thống kê aggregate
-- Không lưu ảnh gốc
-- Xử lý real-time, không buffer
+- Only store aggregate statistics
+- No original image storage
+- Real-time processing, no buffering
 
 ## TODO
 - [ ] Age estimation integration

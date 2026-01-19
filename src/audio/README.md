@@ -1,13 +1,13 @@
 # Audio Module
 
 ## Features
-- Kết nối mic & loa camera
-- Stream audio từ camera lên cloud
-- Nhận audio từ mobile/web để phát
-- Ghi âm khi có sự kiện
-- Xử lý & cải thiện audio
-- Đồng bộ cài đặt từ cloud
-- Tối ưu real-time
+- Connect camera mic & speaker
+- Stream audio from camera to cloud
+- Receive audio from mobile/web to play
+- Record audio on events
+- Audio processing & enhancement
+- Sync settings from cloud
+- Real-time optimization
 
 ## TODO
 - [ ] Audio input/output setup

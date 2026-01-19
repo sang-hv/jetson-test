@@ -1,35 +1,34 @@
 # Mini PC (Jetson Nano) - Task Breakdown
 
-Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên schedule đã cung cấp.
+Comprehensive task list for the Mini PC project based on the provided schedule.
 
 ---
 
-## Phase 1: Thiết lập môi trường
+## Phase 1: Environment Setup
 
 > 📚 **Documentation**: [SETUP_GUIDE.md](./SETUP_GUIDE.md) | [PYTORCH_INSTALL.md](./PYTORCH_INSTALL.md)
 > 🔧 **Scripts**: `scripts/setup.sh` | `scripts/check_system.sh`
 
-### 1.1 Cài đặt JetPack SDK
-- [/] Flash JetPack SDK (latest) lên Jetson Nano *(User đã cài)*
-- [ ] Cấu hình GPIO/Camera interface
-- [ ] Setup kết nối mạng (WiFi/4G/5G)
-- [ ] Chuẩn bị storage (SD Card/NVMe) - Mount SSD vào /data
+### 1.1 JetPack SDK Installation
+- [/] Flash JetPack SDK (latest) to Jetson Nano *(User completed)*
+- [ ] Configure GPIO/Camera interface
+- [ ] Setup network connection (WiFi/4G/5G)
+- [ ] Prepare storage (SD Card/NVMe) - Mount SSD to /data
 - [ ] Test basic functionality
 
-### 1.2 Thiết lập môi trường development
+### 1.2 Development Environment Setup
 - [ ] Setup Python 3.10+ environment
 - [ ] Install Docker & Docker Compose
-- [ ] Install OpenCV với CUDA support
+- [ ] Install OpenCV with CUDA support
 - [ ] Setup Git & SSH keys
 - [ ] Configure CI/CD tools
-- [ ] Tạo project structure chuẩn
-
+- [ ] Create standard project structure
 
 ---
 
 ## Phase 2: Camera & Streaming
 
-### 2.1 Module kết nối camera
+### 2.1 Camera Connection Module
 - [ ] RTSP client implementation
 - [ ] Multi-camera support
 - [ ] Frame capture pipeline
@@ -37,7 +36,7 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 - [ ] Auto-reconnect logic
 - [ ] Local recording (fallback)
 
-### 2.2 Live streaming
+### 2.2 Live Streaming
 - [ ] WebRTC server setup
 - [ ] HLS streaming support
 - [ ] Adaptive bitrate
@@ -46,7 +45,7 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 
 ---
 
-## Phase 3: AI Core (Người khác phụ trách)
+## Phase 3: AI Core (Separate Developer)
 
 ### 3.1 Detection Models
 - [ ] YOLO v11 integration
@@ -68,77 +67,77 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 
 ## Phase 4: Feature Modules
 
-### 4.1 Đếm thành viên về nhà (home_monitoring)
+### 4.1 Family Member Arrival Detection (home_monitoring)
 - [ ] Face recognition & matching
-- [ ] Person tracking vào/ra
-- [ ] Entry/exit detection với ROI
-- [ ] Daily counter với reset schedule
-- [ ] Arrival notification qua LINE
-- [ ] Lịch sử theo ngày/tuần/tháng
+- [ ] Person tracking in/out
+- [ ] Entry/exit detection with ROI
+- [ ] Daily counter with reset schedule
+- [ ] Arrival notification via LINE
+- [ ] History by day/week/month
 
-### 4.2 Đếm tổng lượng người qua (counting/people_flow)
+### 4.2 People Flow Counting (counting/people_flow)
 - [ ] YOLO person detection
 - [ ] De-duplication algorithm (tracking ID)
 - [ ] Time-series analytics
 - [ ] Daily stats & reset
-- [ ] Visualization chart theo giờ
+- [ ] Hourly visualization chart
 
-### 4.3 Cảnh báo người lạ (alerts/stranger)
+### 4.3 Stranger Alert (alerts/stranger)
 - [ ] Face detection & extraction
 - [ ] Matching against whitelist database
-- [ ] Unknown face alert với snapshot
+- [ ] Unknown face alert with snapshot
 - [ ] Visitor log (time/duration)
 - [ ] Confidence threshold tuning
 - [ ] LINE emergency notification
 
-### 4.4 Phát hiện động vật (alerts/animal)
+### 4.4 Animal Detection (alerts/animal)
 - [ ] YOLO animal classes (dog, cat, bird, bear, snake, rat)
 - [ ] Animal tracking & counting
 - [ ] Pet vs wild classification
 - [ ] Unwanted animal alert
 - [ ] Activity timeline
-- [ ] Integration với emergency rules
+- [ ] Integration with emergency rules
 
-### 4.5 Đếm khách vào cửa hàng (counting/store)
+### 4.5 Store Customer Counting (counting/store)
 - [ ] Entry zone ROI detection
-- [ ] Person counting với de-duplication
+- [ ] Person counting with de-duplication
 - [ ] Entry/exit direction detection
 - [ ] Time-based analytics (peak hours)
 - [ ] Daily/weekly/monthly reports
 - [ ] Heatmap visualization
 
-### 4.6 Phân tích nhân khẩu học (demographics)
+### 4.6 Demographics Analysis (demographics)
 - [ ] Age estimation model
 - [ ] Gender classification CNN
 - [ ] Face detection preprocessing
 - [ ] Demographics aggregation & statistics
 - [ ] Dashboard charts (age groups, gender ratio, trends)
-- [ ] Privacy compliance (không lưu ảnh)
+- [ ] Privacy compliance (no image storage)
 
-### 4.7 Phát hiện hành vi bất thường (behavior_analysis)
+### 4.7 Abnormal Behavior Detection (behavior_analysis)
 - [ ] Loitering detection (dwell time tracking)
 - [ ] Shoplifting pattern (pose estimation, hand-to-pocket)
 - [ ] Running detection
 - [ ] Anomaly detection (ML-based behavior analysis)
-- [ ] Alert escalation theo severity
+- [ ] Alert escalation by severity
 - [ ] Video clip evidence capture
 
-### 4.8 Cảnh báo blacklist (alerts/blacklist)
+### 4.8 Blacklist Alert (alerts/blacklist)
 - [ ] Face matching against blacklist database
-- [ ] High-priority alert với ảnh
+- [ ] High-priority alert with image
 - [ ] Log entry attempts & location
-- [ ] Integration với security staff notification
-- [ ] Real-time tracking trong cửa hàng
+- [ ] Integration with security staff notification
+- [ ] Real-time tracking in store
 
-### 4.9 Đếm người real-time (counting/realtime)
+### 4.9 Real-time People Counting (counting/realtime)
 - [ ] YOLO person detection
-- [ ] Real-time counting trong ROI
-- [ ] Occupancy display overlay trên video
+- [ ] Real-time counting in ROI
+- [ ] Occupancy display overlay on video
 - [ ] Max capacity warning
 - [ ] Evacuation support
 - [ ] Heatmap density visualization
 
-### 4.10 Phát hiện tình huống khẩn (alerts/emergency)
+### 4.10 Emergency Situation Detection (alerts/emergency)
 - [ ] Fall detection (pose estimation + motion analysis)
 - [ ] Fight/violence detection (action recognition, skeleton tracking)
 - [ ] Fire/smoke detection (YOLO custom class + color analysis)
@@ -150,7 +149,7 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 
 ## Phase 5: PPE Detection
 
-### 5.1 Kiểm tra mũ bảo hiểm (ppe_detection/helmet)
+### 5.1 Helmet Detection (ppe_detection/helmet)
 - [ ] YOLO helmet class training
 - [ ] Person without helmet detection
 - [ ] Head region tracking
@@ -159,7 +158,7 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 - [ ] Compliance rate statistics
 - [ ] Supervisor notification
 
-### 5.2 Kiểm tra khẩu trang (ppe_detection/mask)
+### 5.2 Mask Detection (ppe_detection/mask)
 - [ ] YOLO mask detection model
 - [ ] Face without mask detection
 - [ ] Mask wearing verification
@@ -168,13 +167,13 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 - [ ] Non-compliance alert
 - [ ] COVID-19 protocol enforcement
 
-### 5.3 Kiểm tra găng tay (ppe_detection/gloves)
+### 5.3 Gloves Detection (ppe_detection/gloves)
 - [ ] Hand detection (MediaPipe/YOLO)
 - [ ] Glove classification (binary: yes/no)
 - [ ] Hand region tracking
 - [ ] Safety zone enforcement (hazardous areas)
 - [ ] Violation tracking & logging
-- [ ] Integration với access control
+- [ ] Integration with access control
 - [ ] Real-time warning
 
 ---
@@ -182,16 +181,16 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 ## Phase 6: Audio Processing
 
 ### 6.1 Audio Hardware
-- [ ] Kết nối mic & loa camera
+- [ ] Connect camera mic & speaker
 - [ ] Audio input/output configuration
 
 ### 6.2 Audio Streaming
-- [ ] Stream audio từ camera lên cloud
-- [ ] Nhận audio từ mobile/web để phát
-- [ ] Ghi âm khi có sự kiện
-- [ ] Xử lý & cải thiện audio
-- [ ] Đồng bộ cài đặt audio từ cloud
-- [ ] Tối ưu cho audio thời gian thực
+- [ ] Stream audio from camera to cloud
+- [ ] Receive audio from mobile/web to play
+- [ ] Record audio on events
+- [ ] Audio processing & enhancement
+- [ ] Sync audio settings from cloud
+- [ ] Optimize for real-time audio
 
 ---
 
@@ -247,7 +246,7 @@ Tổng hợp các task cần thực hiện cho dự án Mini PC dựa trên sche
 ### 9.1 First-time Setup
 - [ ] QR code generation
 - [ ] WiFi config via BLE/AP
-- [ ] Device pairing với user account
+- [ ] Device pairing with user account
 - [ ] Setup wizard
 - [ ] Network config UI
 
