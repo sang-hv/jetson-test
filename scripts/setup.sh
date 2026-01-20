@@ -20,6 +20,10 @@ if [ -d /data ]; then
     DATA_DIR="/data/mini-pc"
     VENV_DIR="/data/venv/mini-pc"
     echo "SSD detected at /data - using SSD for data storage"
+    
+    # Set ownership of /data to current user (required after SSD mount)
+    echo "Setting /data ownership to $USER..."
+    sudo chown -R $USER:$USER /data
 else
     DATA_DIR="$PROJECT_DIR/data"
     VENV_DIR="$PROJECT_DIR/.venv"
