@@ -69,7 +69,15 @@ sudo pip3 install jetson-stats || true
 
 # 4. Create data directories
 echo "=== Creating data directories ==="
-mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
+if [ "$DATA_DIR" = "/data/mini-pc" ]; then
+    # SSD mounted as root, need sudo
+    sudo mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
+    sudo chown -R $USER:$USER "$DATA_DIR"
+else
+    # Local directory, no sudo needed
+    mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
+fi
+
 
 # 5. Add user to groups
 echo "=== Configuring user groups ==="
