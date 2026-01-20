@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mini PC - Quick Setup Script
-# Run this script after mounting SSD
+# Run this script after cloning the project
 
 set -e
 
@@ -9,12 +9,27 @@ echo "  Mini PC Quick Setup"
 echo "========================================="
 echo ""
 
-# Kiểm tra /data
-if [ ! -d /data ]; then
-    echo "Error: /data not found. Please mount SSD first."
-    echo "See docs/SETUP_GUIDE.md for instructions."
-    exit 1
+# Detect project directory (where this script is located)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo "Project directory: $PROJECT_DIR"
+
+# Check if SSD is mounted at /data
+if [ -d /data ]; then
+    DATA_DIR="/data/mini-pc"
+    VENV_DIR="/data/venv/mini-pc"
+    echo "SSD detected at /data - using SSD for data storage"
+else
+    DATA_DIR="$PROJECT_DIR/data"
+    VENV_DIR="$PROJECT_DIR/.venv"
+    echo "No SSD at /data - using local directory for data storage"
+    echo "Warning: Consider mounting SSD for better performance and storage"
 fi
+
+echo "Data directory: $DATA_DIR"
+echo "Venv directory: $VENV_DIR"
+echo ""
 
 # 1. Update system
 echo "=== Updating system packages ==="
@@ -52,11 +67,9 @@ sudo apt install -y \
 echo "=== Installing jetson-stats ==="
 sudo pip3 install jetson-stats || true
 
-# 4. Create directories
-echo "=== Creating project directories ==="
-mkdir -p /data/projects
-mkdir -p /data/venv
-mkdir -p /data/mini-pc/{db,media,faces,logs,models}
+# 4. Create data directories
+echo "=== Creating data directories ==="
+mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
 
 # 5. Add user to groups
 echo "=== Configuring user groups ==="
@@ -77,14 +90,37 @@ echo "=== Setting performance mode ==="
 sudo nvpmodel -m 0 2>/dev/null || true  # Max performance
 sudo jetson_clocks 2>/dev/null || true
 
+# 8. Create virtual environment
+echo "=== Creating Python virtual environment ==="
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+pip install --upgrade pip
+
+# 9. Install Python dependencies
+if [ -f "$PROJECT_DIR/requirements.txt" ]; then
+    echo "=== Installing Python dependencies ==="
+    pip install -r "$PROJECT_DIR/requirements.txt"
+fi
+
+# 10. Create .env file if not exists
+if [ ! -f "$PROJECT_DIR/config/.env" ]; then
+    echo "=== Creating .env file ==="
+    cp "$PROJECT_DIR/config/.env.example" "$PROJECT_DIR/config/.env" 2>/dev/null || true
+fi
+
 echo ""
 echo "========================================="
 echo "  Setup Complete!"
 echo "========================================="
 echo ""
+echo "Configuration:"
+echo "  Project: $PROJECT_DIR"
+echo "  Data:    $DATA_DIR"
+echo "  Venv:    $VENV_DIR"
+echo ""
 echo "Next steps:"
 echo "1. Log out and log back in (for group changes)"
-echo "2. Clone your project to /data/projects"
-echo "3. Create virtual environment: python3 -m venv /data/venv/mini-pc"
-echo "4. Run check_system.sh to verify"
+echo "2. Activate venv: source $VENV_DIR/bin/activate"
+echo "3. Edit config: nano $PROJECT_DIR/config/.env"
+echo "4. Run check: ./scripts/check_system.sh"
 echo ""
