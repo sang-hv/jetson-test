@@ -100,6 +100,11 @@ sudo jetson_clocks 2>/dev/null || true
 
 # 8. Create virtual environment
 echo "=== Creating Python virtual environment ==="
+if [ "$VENV_DIR" = "/data/venv/mini-pc" ]; then
+    # SSD mounted as root, need sudo to create parent dir
+    sudo mkdir -p /data/venv
+    sudo chown -R $USER:$USER /data/venv
+fi
 python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip
