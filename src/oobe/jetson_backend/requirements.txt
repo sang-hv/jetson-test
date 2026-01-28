@@ -1,0 +1,16 @@
+# Thư viện cần thiết cho OOBE BLE WiFi Setup
+# ============================================
+# Cài đặt bằng lệnh: pip3 install -r requirements.txt
+
+# Thư viện D-Bus (cần cài qua apt trước)
+# sudo apt-get install python3-dbus python3-gi
+# dbus-python   # Thường đã được cài sẵn trên Jetson
+
+# Thư viện GPIO cho Jetson Nano
+Jetson.GPIO>=2.0.0; platform_machine=='aarch64'
+
+# Fallback cho development trên máy khác
+# RPi.GPIO>=0.7.0; platform_machine!='aarch64'
+
+# Thư viện tiện ích
+# typing-extensions>=4.0.0

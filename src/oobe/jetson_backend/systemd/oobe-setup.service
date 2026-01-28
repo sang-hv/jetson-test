@@ -1,0 +1,50 @@
+[Unit]
+# =============================================
+# OOBE WiFi Setup Service cho Jetson Nano
+# =============================================
+# Service này tự động khởi động khi boot và chạy
+# script BLE WiFi Setup để cấu hình mạng lần đầu.
+
+Description=OOBE WiFi Setup via BLE for Jetson AI Kit
+Documentation=https://github.com/your-repo/jetson-ai-kit
+
+# Đợi các service cần thiết khởi động xong
+# - bluetooth.target: BlueZ daemon
+# - network-online.target: Network manager
+After=bluetooth.target network-online.target
+Wants=bluetooth.target
+
+[Service]
+# Loại service: forking vì script chạy và giữ
+Type=simple
+
+# User chạy service (cần root để truy cập Bluetooth và nmcli)
+User=root
+Group=root
+
+# Đường dẫn đến script Python
+# Lưu ý: Thay đổi đường dẫn này theo vị trí thực tế của script
+ExecStart=/usr/bin/python3 /opt/oobe-setup/ble_wifi_setup.py
+
+# Khởi động lại nếu script crash
+Restart=on-failure
+RestartSec=5
+
+# Timeout khởi động (30 giây)
+TimeoutStartSec=30
+
+# Environment variables
+Environment=PYTHONUNBUFFERED=1
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oobe-setup
+
+# Working directory
+WorkingDirectory=/opt/oobe-setup
+
+[Install]
+# Kích hoạt service khi boot vào multi-user mode
+WantedBy=multi-user.target
