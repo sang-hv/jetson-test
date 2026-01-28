@@ -19,14 +19,15 @@ WiFi Setup qua Bluetooth Low Energy cho Jetson Nano AI Kit.
 
 ## 1. Yêu cầu hệ thống
 
-### Jetson Nano
+### Jetson Nano / Jetson Orin Nano
 
 | Thành phần | Yêu cầu |
 |------------|---------|
-| OS | JetPack 4.5+ (Ubuntu 18.04) |
-| Python | 3.6+ |
+| OS | JetPack 4.5+ cho Nano / JetPack 5.1.2+ cho Orin Nano |
+| Python | 3.6+ (Nano) / 3.8+ (Orin Nano) |
 | Bluetooth | BlueZ 5.48+ |
 | Network Manager | nmcli |
+| Jetson.GPIO | >= 2.0.0 (Nano) / >= 2.1.0 (Orin Nano) |
 
 ### Web App (Thiết bị client)
 
@@ -63,7 +64,9 @@ sudo apt-get install -y network-manager
 
 # GPIO library cho Jetson
 sudo apt-get install -y python3-pip
-sudo pip3 install Jetson.GPIO
+
+# Cài đặt Jetson.GPIO (version >= 2.1.0 cho Jetson Orin Nano)
+sudo pip3 install --upgrade Jetson.GPIO
 ```
 
 ### Bước 3: Copy code lên Jetson
@@ -87,11 +90,20 @@ cd /opt/oobe-setup
 sudo pip3 install -r requirements.txt
 ```
 
-### Bước 5: Đặt quyền thực thi
+### Bước 5: Đặt quyền thực thi và cấu hình GPIO permissions
 
 ```bash
 sudo chmod +x /opt/oobe-setup/ble_wifi_setup.py
+
+# Tạo group gpio và thêm user (quan trọng cho Orin Nano)
+sudo groupadd -f -r gpio
+sudo usermod -a -G gpio $USER
+
+# Logout và login lại để áp dụng permissions
+# Hoặc chạy: newgrp gpio
 ```
+
+> ⚠️ **Quan trọng cho Jetson Orin Nano**: Nếu không thêm user vào group gpio, bạn sẽ gặp lỗi "Could not determine Jetson model". Chạy với sudo là giải pháp tạm thời.
 
 ---
 
@@ -262,8 +274,14 @@ sudo cp -r dist/* /var/www/html/oobe-setup/
 ### Test Script thủ công
 
 ```bash
-# Chạy script với quyền root
+# Test với sudo (khuyến nghị cho lần đầu)
 sudo python3 /opt/oobe-setup/ble_wifi_setup.py --force
+
+# Kiểm tra version Jetson.GPIO
+python3 -c "import Jetson.GPIO; print('Version:', Jetson.GPIO.VERSION)"
+
+# Kiểm tra Jetson model detection
+cat /proc/device-tree/model
 ```
 
 ### Xem Log
@@ -306,8 +324,8 @@ nmcli device status
 ### Debug GPIO
 
 ```bash
-# Kiểm tra GPIO có hoạt động không
-python3 -c "
+# Kiểm tra GPIO có hoạt động không (chạy với sudo)
+sudo python3 -c "
 import Jetson.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(17, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -315,6 +333,27 @@ print('GPIO 17 state:', GPIO.input(17))
 GPIO.cleanup()
 "
 ```
+
+### Xử lý lỗi "Could not determine Jetson model"
+
+Nếu gặp lỗi này trên Jetson Orin Nano:
+
+```bash
+# Giải pháp 1: Chạy với sudo
+sudo python3 /opt/oobe-setup/ble_wifi_setup.py
+
+# Giải pháp 2: Cập nhật Jetson.GPIO
+sudo pip3 install --upgrade Jetson.GPIO
+
+# Giải pháp 3: Kiểm tra quyền truy cập device-tree
+sudo chmod a+r /proc/device-tree/model
+
+# Giải pháp 4: Thêm user vào group gpio (đã làm ở bước 5)
+sudo usermod -a -G gpio $USER
+# Sau đó logout và login lại
+```
+
+> 💡 **Lưu ý**: Code đã được cập nhật để tự động fallback sang mock mode nếu GPIO không khả dụng. BLE setup vẫn hoạt động bình thường, chỉ tính năng nút Reset sẽ không dùng được.
 
 ---
 
@@ -355,6 +394,31 @@ GPIO.cleanup()
 Để test trên máy khác:
 - Sử dụng chế độ mock (script tự động detect)
 - Hoặc test trên máy ảo Linux với USB Bluetooth adapter
+
+### Q: Gặp lỗi "Could not determine Jetson model" trên Orin Nano?
+
+**A**: Đây là lỗi phổ biến trên Jetson Orin Nano. Các cách khắc phục:
+1. **Chạy với sudo**: `sudo python3 /opt/oobe-setup/ble_wifi_setup.py`
+2. **Cập nhật Jetson.GPIO**: `sudo pip3 install --upgrade Jetson.GPIO` (cần version >= 2.1.0)
+3. **Thêm user vào group gpio**: `sudo usermod -a -G gpio $USER` (sau đó logout/login)
+4. **Kiểm tra JetPack**: Đảm bảo dùng JetPack 5.1.2 trở lên
+5. **Code đã được sửa**: Tự động fallback sang mock mode, BLE vẫn hoạt động
+
+### Q: GPIO không hoạt động nhưng BLE vẫn cần dùng được?
+
+**A**: Từ phiên bản code mới, GPIO tự động fallback sang mock mode nếu gặp lỗi.
+BLE setup vẫn chạy bình thường, chỉ mất tính năng nút Reset. Dùng flag `--force` để bỏ qua kiểm tra GPIO:
+```bash
+sudo python3 /opt/oobe-setup/ble_wifi_setup.py --force
+```
+
+### Q: Sự khác biệt giữa Jetson Nano và Orin Nano?
+
+**A**:
+- **Jetson Nano**: JetPack 4.x, Jetson.GPIO >= 2.0.0
+- **Jetson Orin Nano**: JetPack 5.x, Jetson.GPIO >= 2.1.0, mạnh hơn nhiều
+- **GPIO pinout**: Tương thích 100%, dùng chung mã BCM
+- **Code tương thích**: Cả hai platform đều chạy được với code hiện tại
 
 ---
 

@@ -7,6 +7,12 @@ File này chứa tất cả các hằng số và cấu hình cần thiết
 cho việc thiết lập WiFi qua Bluetooth Low Energy.
 
 Tác giả: Jetson AI Kit Team
+
+Tương thích:
+- Jetson Nano
+- Jetson Orin Nano (JetPack 5.1.2+)
+- Jetson Xavier series
+- Các thiết bị có Bluetooth và WiFi
 """
 
 # =============================================================================
@@ -45,6 +51,15 @@ class WiFiStatus:
 
 # GPIO pin cho nút Reset (nhấn giữ để vào chế độ BLE Setup)
 # Sử dụng đánh số BCM (Broadcom SOC channel)
+#
+# Pin mapping (40-pin header):
+# - BCM 17 = Physical pin 11
+# - Tương thích với: Jetson Nano, Jetson Orin Nano, RPi
+#
+# Kết nối phần cứng:
+# - Một đầu nút nhấn nối với pin 11 (BCM 17)
+# - Đầu kia nối với GND (ví dụ: pin 9, 14, 20, 25, 30, 34, 39)
+# - Pull-up resistor được cấu hình trong code (không cần điện trở ngoài)
 GPIO_RESET_BUTTON = 17
 
 # Thời gian nhấn giữ nút để kích hoạt chế độ Reset (tính bằng giây)
@@ -57,7 +72,9 @@ BUTTON_HOLD_TIME = 3.0
 # Timeout khi kết nối WiFi (tính bằng giây)
 WIFI_CONNECT_TIMEOUT = 30
 
-# Interface WiFi mặc định trên Jetson Nano
+# Interface WiFi mặc định
+# - Jetson Nano/Orin Nano thường dùng: wlan0
+# - Có thể kiểm tra bằng lệnh: ip link show hoặc nmcli device
 WIFI_INTERFACE = "wlan0"
 
 # Số lần thử lại kết nối WiFi nếu thất bại

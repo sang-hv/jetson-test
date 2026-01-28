@@ -1,16 +1,35 @@
 # Thư viện cần thiết cho OOBE BLE WiFi Setup
 # ============================================
 # Cài đặt bằng lệnh: pip3 install -r requirements.txt
+#
+# Tương thích:
+# - Jetson Nano (JetPack 4.x)
+# - Jetson Orin Nano (JetPack 5.x)
+# - Jetson Xavier series
 
-# Thư viện D-Bus (cần cài qua apt trước)
-# sudo apt-get install python3-dbus python3-gi
-# dbus-python   # Thường đã được cài sẵn trên Jetson
+# ============================================
+# HỆ THỐNG (Cài qua APT trước khi chạy pip)
+# ============================================
+# sudo apt-get install -y python3-dbus python3-gi bluez
 
-# Thư viện GPIO cho Jetson Nano
-Jetson.GPIO>=2.0.0; platform_machine=='aarch64'
+# ============================================
+# GPIO LIBRARY
+# ============================================
+# Jetson.GPIO cho Jetson devices
+# Version >= 2.1.0 YÊU CẦU cho Jetson Orin Nano
+# Version >= 2.0.0 cho Jetson Nano cũ
+Jetson.GPIO>=2.1.0; platform_machine=='aarch64'
 
-# Fallback cho development trên máy khác
+# Fallback cho development trên máy khác (không cần trên Jetson)
 # RPi.GPIO>=0.7.0; platform_machine!='aarch64'
 
-# Thư viện tiện ích
-# typing-extensions>=4.0.0
+# ============================================
+# PYTHON DEPENDENCIES
+# ============================================
+# Tất cả dependencies chính đã được cài qua apt:
+# - dbus-python (python3-dbus)
+# - PyGObject (python3-gi)
+# - GLib bindings (python3-gi-cairo)
+
+# Không cần thêm dependencies từ pip vì BlueZ stack
+# sử dụng D-Bus và GLib đã được cài sẵn trong system

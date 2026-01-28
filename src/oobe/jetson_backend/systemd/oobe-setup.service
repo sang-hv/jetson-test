@@ -1,9 +1,14 @@
 [Unit]
 # =============================================
-# OOBE WiFi Setup Service cho Jetson Nano
+# OOBE WiFi Setup Service cho Jetson Nano/Orin Nano
 # =============================================
 # Service này tự động khởi động khi boot và chạy
 # script BLE WiFi Setup để cấu hình mạng lần đầu.
+#
+# Tương thích:
+# - Jetson Nano (JetPack 4.x)
+# - Jetson Orin Nano (JetPack 5.x)
+# - Jetson Xavier series
 
 Description=OOBE WiFi Setup via BLE for Jetson AI Kit
 Documentation=https://github.com/your-repo/jetson-ai-kit

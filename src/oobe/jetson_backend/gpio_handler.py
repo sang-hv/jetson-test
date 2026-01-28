@@ -10,9 +10,25 @@ Module này cung cấp các hàm để:
 
 Tác giả: Jetson AI Kit Team
 
+Hỗ trợ:
+- Jetson Nano
+- Jetson Orin Nano (yêu cầu Jetson.GPIO >= 2.1.0)
+- Jetson Xavier series
+- Raspberry Pi (fallback to RPi.GPIO)
+
+Yêu cầu:
+- Jetson.GPIO hoặc RPi.GPIO
+- Quyền root HOẶC user trong group 'gpio'
+- Trên Jetson Orin Nano: JetPack 5.1.2+ khuyến nghị
+
+Cài đặt quyền GPIO:
+    sudo groupadd -f -r gpio
+    sudo usermod -a -G gpio $USER
+    # Sau đó logout và login lại
+
 Lưu ý:
-- Sử dụng Jetson.GPIO (tương thích với RPi.GPIO)
-- Trên Jetson Nano, cần chạy với quyền root hoặc thêm user vào group gpio
+- Nếu gặp lỗi "Could not determine Jetson model", hãy chạy với sudo
+- Module tự động fallback sang mock mode nếu GPIO không khả dụng
 """
 
 import time
@@ -21,16 +37,30 @@ import threading
 from typing import Callable, Optional
 
 # Thử import Jetson.GPIO, nếu không có thì dùng mock cho development
+GPIO_AVAILABLE = False
+GPIO = None
+GPIO_ERROR_MSG = None
+
 try:
     import Jetson.GPIO as GPIO
     GPIO_AVAILABLE = True
-except ImportError:
+    print("Jetson.GPIO imported successfully")
+except ImportError as e:
+    GPIO_ERROR_MSG = f"ImportError: {e}"
+    # Thử RPi.GPIO nếu Jetson.GPIO không có
     try:
         import RPi.GPIO as GPIO
         GPIO_AVAILABLE = True
+        print("RPi.GPIO imported successfully")
     except ImportError:
-        GPIO_AVAILABLE = False
-        GPIO = None
+        GPIO_ERROR_MSG = "Neither Jetson.GPIO nor RPi.GPIO available"
+except Exception as e:
+    # Bắt các lỗi khác khi import (ví dụ: không detect được Jetson model)
+    GPIO_ERROR_MSG = f"GPIO initialization error: {type(e).__name__}: {e}"
+    GPIO_AVAILABLE = False
+    GPIO = None
+    print(f"Warning: {GPIO_ERROR_MSG}")
+    print("Fallback to Mock GPIO mode")
 
 from config import GPIO_RESET_BUTTON, BUTTON_HOLD_TIME
 
@@ -89,15 +119,18 @@ class GPIOHandler:
         if GPIO_AVAILABLE:
             self._setup_gpio()
         else:
-            logger.warning(
-                "GPIO không khả dụng (chạy trên máy không phải Jetson/RPi). "
-                "Chế độ mock được kích hoạt."
-            )
+            if GPIO_ERROR_MSG:
+                logger.warning(f"GPIO không khả dụng: {GPIO_ERROR_MSG}")
+            else:
+                logger.warning(
+                    "GPIO không khả dụng (chạy trên máy không phải Jetson/RPi). "
+                )
+            logger.info("Chế độ mock được kích hoạt - GPIO monitoring disabled.")
     
     def _setup_gpio(self) -> None:
         """
         Thiết lập GPIO pin cho nút nhấn.
-        
+
         Cấu hình:
         - Mode: BCM (đánh số theo Broadcom)
         - Input với Pull-up resistor (nút nhấn nối xuống GND)
@@ -105,7 +138,7 @@ class GPIOHandler:
         try:
             # Sử dụng BCM numbering
             GPIO.setmode(GPIO.BCM)
-            
+
             # Cấu hình pin là input với pull-up resistor
             # Khi nhấn nút: LOW, khi thả: HIGH
             GPIO.setup(
@@ -113,7 +146,7 @@ class GPIOHandler:
                 GPIO.IN,
                 pull_up_down=GPIO.PUD_UP
             )
-            
+
             # Thêm event detect cho falling edge (khi nhấn nút)
             GPIO.add_event_detect(
                 self.pin,
@@ -121,13 +154,16 @@ class GPIOHandler:
                 callback=self._button_event_callback,
                 bouncetime=50  # Debounce 50ms
             )
-            
+
             self._initialized = True
-            logger.info(f"GPIO {self.pin} đã được khởi tạo thành công")
-            
+            logger.info(f"GPIO pin {self.pin} đã được khởi tạo thành công")
+
         except Exception as e:
-            logger.error(f"Lỗi khi khởi tạo GPIO: {e}")
+            logger.error(f"Lỗi khi khởi tạo GPIO pin {self.pin}: {e}")
+            logger.warning("GPIO monitoring sẽ không hoạt động. BLE setup vẫn có thể chạy với --force flag.")
             self._initialized = False
+            import traceback
+            logger.debug(traceback.format_exc())
     
     def _button_event_callback(self, channel: int) -> None:
         """
@@ -184,14 +220,14 @@ class GPIOHandler:
         Dừng theo dõi nút nhấn và giải phóng GPIO.
         """
         self._monitoring = False
-        
+
         if GPIO_AVAILABLE and self._initialized:
             try:
                 GPIO.remove_event_detect(self.pin)
                 GPIO.cleanup(self.pin)
                 logger.info("Đã dừng theo dõi và giải phóng GPIO")
             except Exception as e:
-                logger.error(f"Lỗi khi cleanup GPIO: {e}")
+                logger.warning(f"Lỗi khi cleanup GPIO (có thể bỏ qua): {e}")
     
     def is_button_pressed(self) -> bool:
         """
