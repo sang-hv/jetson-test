@@ -28,7 +28,8 @@ import time
 import signal
 import logging
 import threading
-from typing import Optional
+import json
+from typing import Optional, List
 
 # Thêm thư mục hiện tại vào path để import được các module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,13 +41,17 @@ from config import (
     SSID_CHAR_UUID,
     PWD_CHAR_UUID,
     STATUS_CHAR_UUID,
+    WIFI_SCAN_CHAR_UUID,
+    WIFI_LIST_CHAR_UUID,
     WiFiStatus,
+    WiFiScanStatus,
+    WIFI_SCAN_MAX_NETWORKS,
     LOG_LEVEL,
     LOG_FILE
 )
 
 # Import các module khác
-from wifi_manager import check_internet_connection, connect_wifi
+from wifi_manager import check_internet_connection, connect_wifi, scan_wifi_networks
 from gpio_handler import get_gpio_handler
 
 # Thử import thư viện BLE
@@ -182,9 +187,34 @@ if DBUS_AVAILABLE:
         
         def __init__(self, bus, index):
             Advertisement.__init__(self, bus, index, "peripheral")
-            self.local_name = BLE_DEVICE_NAME
+            
+            # GIẢI PHÁP CHO LỖI "Failed to register advertisement":
+            # Gói tin quảng cáo legacy bị giới hạn 31 bytes.
+            # - Flags: 3 bytes
+            # - Service UUID (128-bit): 18 bytes
+            # - TX Power: 3 bytes
+            # - Name: Còn lại rất ít (khoảng 7 bytes)
+            #
+            # Nếu tên > 7 ký tự + UUID 128-bit -> Tràn gói tin -> Lỗi.
+            # Fix:
+            # 1. Tắt TX Power (tiết kiệm 3 bytes)
+            # 2. Nếu tên quá dài, dùng tên ngắn hơn cho quảng cáo (Scan Response sẽ chứa tên đầy đủ nếu hỗ trợ)
+            
+            self.include_tx_power = False  # Tắt để tiết kiệm space
             self.service_uuids = [SERVICE_UUID]
-            self.include_tx_power = True
+            
+            # Tính toán độ dài khả dụng
+            # Nếu dùng 128-bit UUID, ta còn khoảng: 31 - 3 (Flags) - 18 (UUID) = 10 bytes cho tên (bao gồm header)
+            # Header tên tốn 2 bytes -> Tên tối đa ~8 ký tự.
+            
+            if len(BLE_DEVICE_NAME) > 8:
+                # Dùng tên ngắn cho quảng cáo để đảm bảo packet hợp lệ
+                # Mobile App vẫn sẽ thấy tên đầy đủ khi kết nối hoặc scan response
+                self.local_name = BLE_DEVICE_NAME[:8]
+                logger.info(f"Tên thiết bị quá dài, dùng tên rút gọn cho quảng cáo: {self.local_name}")
+            else:
+                self.local_name = BLE_DEVICE_NAME
+                
             logger.info(f"Tạo advertisement với tên: {self.local_name}")
 
     # =============================================================================
@@ -439,31 +469,127 @@ if DBUS_AVAILABLE:
             self.notify_value(self.value)
 
 
+    class WiFiScanCharacteristic(Characteristic):
+        """
+        Characteristic để nhận lệnh scan WiFi từ Mobile App.
+        
+        Flags: write, write-without-response
+        
+        Giá trị ghi:
+        - 1: Bắt đầu scan WiFi
+        - 0: Hủy scan (nếu đang scan)
+        """
+        
+        def __init__(self, bus, index, service, wifi_scan_handler):
+            Characteristic.__init__(
+                self, bus, index, WIFI_SCAN_CHAR_UUID,
+                ['write', 'write-without-response'],
+                service
+            )
+            self.wifi_scan_handler = wifi_scan_handler
+            logger.info(f"Tạo WiFi Scan Characteristic: {WIFI_SCAN_CHAR_UUID}")
+
+        def WriteValue(self, value, options):
+            # Đọc command từ app
+            if len(value) > 0:
+                command = value[0]
+                logger.info(f"Nhận lệnh scan WiFi: {command}")
+                
+                if command == 1:
+                    # Bắt đầu scan
+                    self.wifi_scan_handler.start_scan()
+                elif command == 0:
+                    # Hủy scan
+                    self.wifi_scan_handler.cancel_scan()
+
+
+    class WiFiListCharacteristic(Characteristic):
+        """
+        Characteristic để gửi danh sách WiFi về Mobile App.
+        
+        Flags: read, notify
+        
+        Giá trị:
+        - JSON string chứa danh sách WiFi networks
+        - Format: {"status": 0-3, "networks": [{"ssid": "...", "signal": 85, "security": "WPA2"}, ...]}
+        """
+        
+        def __init__(self, bus, index, service):
+            Characteristic.__init__(
+                self, bus, index, WIFI_LIST_CHAR_UUID,
+                ['read', 'notify'],
+                service
+            )
+            # Khởi tạo với trạng thái idle
+            self._set_initial_value()
+            logger.info(f"Tạo WiFi List Characteristic: {WIFI_LIST_CHAR_UUID}")
+        
+        def _set_initial_value(self):
+            """Set giá trị khởi tạo."""
+            initial_data = {
+                "status": WiFiScanStatus.IDLE,
+                "networks": []
+            }
+            self.value = list(json.dumps(initial_data).encode('utf-8'))
+
+        def set_scan_status(self, status: int, networks: List[dict] = None):
+            """
+            Cập nhật trạng thái scan và danh sách mạng WiFi.
+            
+            Args:
+                status: Một trong các giá trị WiFiScanStatus
+                networks: Danh sách mạng WiFi (optional)
+            """
+            data = {
+                "status": status,
+                "networks": networks or []
+            }
+            json_str = json.dumps(data, ensure_ascii=False)
+            logger.info(f"Cập nhật WiFi list: status={status}, networks={len(networks or [])}")
+            
+            self.value = list(json_str.encode('utf-8'))
+            self.notify_value(self.value)
+        
+        def ReadValue(self, options):
+            """Đọc giá trị hiện tại."""
+            logger.debug(f"Đọc WiFi list characteristic")
+            return dbus.Array(self.value, signature='y')
+
+
     class WiFiSetupService(Service):
         """
         GATT Service chính cho WiFi Setup.
         
-        Chứa 3 characteristics:
-        - SSID (write)
-        - Password (write)
-        - Status (read, notify)
+        Chứa 5 characteristics:
+        - SSID (write): Nhận tên WiFi từ app
+        - Password (write): Nhận mật khẩu WiFi từ app
+        - Status (read, notify): Trạng thái kết nối WiFi
+        - WiFi Scan (write): Trigger scan WiFi
+        - WiFi List (read, notify): Danh sách mạng WiFi
         """
         
-        def __init__(self, bus, index, wifi_setup_handler):
+        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler):
             Service.__init__(self, bus, index, SERVICE_UUID, True)
             
-            # Tạo các characteristics
+            # Tạo các characteristics cũ
             self.ssid_chrc = SSIDCharacteristic(bus, 0, self, wifi_setup_handler)
             self.pwd_chrc = PasswordCharacteristic(bus, 1, self, wifi_setup_handler)
             self.status_chrc = StatusCharacteristic(bus, 2, self)
             
-            # Thêm vào service
+            # Tạo các characteristics mới cho WiFi Scan
+            self.wifi_scan_chrc = WiFiScanCharacteristic(bus, 3, self, wifi_scan_handler)
+            self.wifi_list_chrc = WiFiListCharacteristic(bus, 4, self)
+            
+            # Thêm tất cả vào service
             self.add_characteristic(self.ssid_chrc)
             self.add_characteristic(self.pwd_chrc)
             self.add_characteristic(self.status_chrc)
+            self.add_characteristic(self.wifi_scan_chrc)
+            self.add_characteristic(self.wifi_list_chrc)
             
             # Lưu reference để cập nhật status
             wifi_setup_handler.status_chrc = self.status_chrc
+            wifi_scan_handler.wifi_list_chrc = self.wifi_list_chrc
             
             logger.info(f"Tạo WiFi Setup Service: {SERVICE_UUID}")
 
@@ -565,6 +691,88 @@ class WiFiSetupHandler:
 
 
 # =============================================================================
+# WIFI SCAN HANDLER
+# =============================================================================
+
+class WiFiScanHandler:
+    """
+    Handler xử lý việc scan WiFi.
+    
+    Nhận lệnh scan từ BLE, thực hiện quét mạng WiFi
+    và gửi kết quả về qua WiFi List Characteristic.
+    """
+    
+    def __init__(self):
+        self.wifi_list_chrc = None  # Sẽ được set bởi WiFiSetupService
+        self._scan_thread: Optional[threading.Thread] = None
+        self._scanning = False
+        
+    def start_scan(self):
+        """Bắt đầu scan WiFi."""
+        if self._scanning:
+            logger.warning("Đang scan WiFi, bỏ qua yêu cầu mới")
+            return
+        
+        self._scanning = True
+        self._scan_thread = threading.Thread(
+            target=self._perform_scan,
+            daemon=True
+        )
+        self._scan_thread.start()
+    
+    def cancel_scan(self):
+        """Hủy scan (nếu có thể)."""
+        self._scanning = False
+        logger.info("Đã yêu cầu hủy scan WiFi")
+    
+    def _perform_scan(self):
+        """
+        Thực hiện scan WiFi.
+        
+        Được chạy trong thread riêng để không block BLE.
+        """
+        logger.info("Bắt đầu scan WiFi...")
+        
+        # Thông báo đang scan
+        if self.wifi_list_chrc:
+            GLib.idle_add(
+                lambda: self.wifi_list_chrc.set_scan_status(WiFiScanStatus.SCANNING, [])
+            )
+        
+        try:
+            # Thực hiện scan
+            networks = scan_wifi_networks()
+            
+            # Kiểm tra xem có bị hủy không
+            if not self._scanning:
+                logger.info("Scan WiFi đã bị hủy")
+                return
+            
+            # Giới hạn số mạng trả về
+            networks = networks[:WIFI_SCAN_MAX_NETWORKS]
+            
+            # Sắp xếp theo signal strength (mạnh nhất trước)
+            networks = sorted(networks, key=lambda x: x.get('signal', 0), reverse=True)
+            
+            logger.info(f"Scan hoàn tất: tìm thấy {len(networks)} mạng WiFi")
+            
+            # Gửi kết quả về app
+            if self.wifi_list_chrc:
+                GLib.idle_add(
+                    lambda: self.wifi_list_chrc.set_scan_status(WiFiScanStatus.COMPLETED, networks)
+                )
+                
+        except Exception as e:
+            logger.error(f"Lỗi khi scan WiFi: {e}")
+            if self.wifi_list_chrc:
+                GLib.idle_add(
+                    lambda: self.wifi_list_chrc.set_scan_status(WiFiScanStatus.ERROR, [])
+                )
+        finally:
+            self._scanning = False
+
+
+# =============================================================================
 # BLE SERVER
 # =============================================================================
 
@@ -585,6 +793,7 @@ class BLEServer:
         self.advertisement = None
         self.app = None
         self.wifi_handler = None
+        self.wifi_scan_handler = None
         
     def _find_adapter(self):
         """Tìm BLE adapter (hciX)."""
@@ -634,9 +843,12 @@ class BLEServer:
             # Tạo WiFi handler
             self.wifi_handler = WiFiSetupHandler(self.mainloop)
             
+            # Tạo WiFi Scan handler
+            self.wifi_scan_handler = WiFiScanHandler()
+            
             # Tạo và đăng ký Application (GATT Services)
             self.app = Application(self.bus)
-            wifi_service = WiFiSetupService(self.bus, 0, self.wifi_handler)
+            wifi_service = WiFiSetupService(self.bus, 0, self.wifi_handler, self.wifi_scan_handler)
             self.app.add_service(wifi_service)
             
             # Đăng ký GATT

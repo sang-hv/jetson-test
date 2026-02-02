@@ -125,6 +125,34 @@ def scan_wifi_networks() -> List[dict]:
     return networks
 
 
+def get_wifi_interface() -> str:
+    """
+    Tự động phát hiện interface WiFi khả dụng.
+    
+    Returns:
+        str: Tên interface WiFi (ví dụ: wlan0, wlan1), hoặc WIFI_INTERFACE mặc định
+    """
+    try:
+        # Cách 1: Sử dụng nmcli device
+        cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[1] == "wifi":
+                    # Ưu tiên interface đang connected hoặc available
+                    logger.info(f"Phát hiện WiFi interface: {parts[0]}")
+                    return parts[0]
+                    
+    except Exception as e:
+        logger.warning(f"Lỗi khi tự động phát hiện interface: {e}")
+        
+    # Fallback về cấu hình mặc định (wlan0)
+    logger.info(f"Sử dụng WiFi interface mặc định: {WIFI_INTERFACE}")
+    return WIFI_INTERFACE
+
+
 def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
     """
     Kết nối đến mạng WiFi với SSID và mật khẩu được cung cấp.
@@ -152,6 +180,9 @@ def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
     """
     logger.info(f"Bắt đầu kết nối đến mạng WiFi: {ssid}")
     
+    # Bước 0: Xác định interface
+    interface = get_wifi_interface()
+    
     # Bước 1: Xóa connection cũ nếu có (tránh trùng lặp)
     try:
         delete_cmd = ["nmcli", "connection", "delete", ssid]
@@ -173,7 +204,7 @@ def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
             connect_cmd = [
                 "nmcli", "device", "wifi", "connect", ssid,
                 "password", password,
-                "ifname", WIFI_INTERFACE
+                "ifname", interface
             ]
             
             result = subprocess.run(
@@ -256,8 +287,9 @@ def disconnect_wifi() -> bool:
     Returns:
         bool: True nếu ngắt thành công
     """
+    interface = get_wifi_interface()
     try:
-        cmd = ["nmcli", "device", "disconnect", WIFI_INTERFACE]
+        cmd = ["nmcli", "device", "disconnect", interface]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0:

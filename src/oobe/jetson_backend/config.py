@@ -31,6 +31,10 @@ SSID_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"     # Nhận tên WiFi
 PWD_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"      # Nhận mật khẩu WiFi
 STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3"   # Trạng thái kết nối
 
+# UUID cho WiFi Scan (tính năng mới)
+WIFI_SCAN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef4"   # Write: trigger scan WiFi
+WIFI_LIST_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef5"   # Read/Notify: danh sách WiFi (JSON)
+
 # =============================================================================
 # TRẠNG THÁI KẾT NỐI WIFI
 # =============================================================================
@@ -44,6 +48,21 @@ class WiFiStatus:
     CONNECTING = 1       # Đang thực hiện kết nối WiFi
     SUCCESS = 2          # Kết nối thành công
     ERROR = 3            # Lỗi kết nối (sai mật khẩu, không tìm thấy mạng, etc.)
+
+
+class WiFiScanStatus:
+    """
+    Enum cho các trạng thái scan WiFi
+    Được gửi kèm với danh sách WiFi qua WIFI_LIST_CHAR
+    """
+    IDLE = 0             # Chưa scan
+    SCANNING = 1         # Đang scan
+    COMPLETED = 2        # Scan hoàn tất
+    ERROR = 3            # Lỗi khi scan
+
+
+# Cấu hình WiFi Scan
+WIFI_SCAN_MAX_NETWORKS = 15  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
 
 # =============================================================================
 # CẤU HÌNH GPIO
