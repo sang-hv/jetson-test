@@ -94,7 +94,7 @@ WIFI_CONNECT_TIMEOUT = 30
 # Interface WiFi mặc định
 # - Jetson Nano/Orin Nano thường dùng: wlan0
 # - Có thể kiểm tra bằng lệnh: ip link show hoặc nmcli device
-WIFI_INTERFACE = "wlan0"
+WIFI_INTERFACE = "wlP1p1s0"
 
 # Số lần thử lại kết nối WiFi nếu thất bại
 WIFI_RETRY_COUNT = 3
