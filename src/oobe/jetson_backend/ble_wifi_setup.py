@@ -748,16 +748,13 @@ class WiFiScanHandler:
                 logger.info("Scan WiFi đã bị hủy")
                 return
             
-            # Lọc chỉ lấy mạng bắt đầu bằng "DEHA"
-            networks = [n for n in networks if n.get('ssid', '').startswith('DEHA')]
+            # Giới hạn số mạng trả về
+            networks = networks[:WIFI_SCAN_MAX_NETWORKS]
             
             # Sắp xếp theo signal strength (mạnh nhất trước)
             networks = sorted(networks, key=lambda x: x.get('signal', 0), reverse=True)
             
-            # Giới hạn số mạng trả về
-            networks = networks[:WIFI_SCAN_MAX_NETWORKS]
-            
-            logger.info(f"Scan hoàn tất: tìm thấy {len(networks)} mạng WiFi (chỉ SSID bắt đầu bằng 'DEHA')")
+            logger.info(f"Scan hoàn tất: tìm thấy {len(networks)} mạng WiFi")
             
             # Gửi kết quả về app
             if self.wifi_list_chrc:

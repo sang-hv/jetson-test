@@ -62,7 +62,7 @@ class WiFiScanStatus:
 
 
 # Cấu hình WiFi Scan
-WIFI_SCAN_MAX_NETWORKS = 15  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
+WIFI_SCAN_MAX_NETWORKS = 4  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
 
 # =============================================================================
 # CẤU HÌNH GPIO
@@ -92,9 +92,8 @@ BUTTON_HOLD_TIME = 3.0
 WIFI_CONNECT_TIMEOUT = 30
 
 # Interface WiFi mặc định
-# - Jetson Nano/Orin Nano thường dùng: wlan0 hoặc wlP1p1s0
+# - Jetson Nano/Orin Nano thường dùng: wlan0
 # - Có thể kiểm tra bằng lệnh: ip link show hoặc nmcli device
-# - Dùng cho cả WiFi scanning và Access Point
 WIFI_INTERFACE = "wlP1p1s0"
 
 # Số lần thử lại kết nối WiFi nếu thất bại
@@ -129,46 +128,3 @@ SCRIPT_PATH = "/opt/oobe-setup/ble_wifi_setup.py"
 
 # User chạy service (cần quyền root để sử dụng Bluetooth và nmcli)
 SERVICE_USER = "root"
-
-# =============================================================================
-# WiFi Access Point Mode Configuration
-# =============================================================================
-
-# Chế độ kết nối mặc định cho mode_selector.py
-# Tùy chọn: "ble", "ap"
-DEFAULT_MODE = "ble"  # Mặc định dùng BLE để tương thích ngược
-
-# AP Configuration - Cấu hình Access Point
-AP_SSID = "Jetson_Setup"        # SSID của WiFi AP mà Jetson sẽ phát ra
-AP_PASSWORD = "jetson123"       # Mật khẩu cố định, dễ nhớ cho người dùng
-AP_CHANNEL = 6                  # Kênh WiFi (1-11), mặc định 6
-AP_IP_ADDRESS = "192.168.4.1"   # IP của Jetson khi ở AP mode
-AP_SUBNET_MASK = "255.255.255.0"  # Subnet mask cho AP network
-AP_DHCP_RANGE_START = "192.168.4.10"  # Bắt đầu DHCP range
-AP_DHCP_RANGE_END = "192.168.4.50"    # Kết thúc DHCP range
-
-# HTTP Server Configuration - Cấu hình HTTP REST API Server
-HTTP_SERVER_PORT = 8080         # Port cho HTTP server
-HTTP_SERVER_HOST = "0.0.0.0"    # Bind tất cả interfaces
-CORS_ENABLED = True             # Enable CORS cho web app development
-
-# AP Mode Behavior - Hành vi của AP mode
-AP_AUTO_SHUTDOWN_TIMEOUT = 1800  # 30 phút - tự động tắt AP nếu không có kết nối
-AP_MAX_CONNECTION_ATTEMPTS = 5   # Số lần thử kết nối WiFi tối đa
-AP_SCAN_TIMEOUT = 10             # Timeout khi scan WiFi trong AP mode (giây)
-
-# =============================================================================
-# Virtual Interface Configuration
-# =============================================================================
-
-# Bật/tắt virtual interface cho Access Point
-# Khi bật, AP sẽ chạy trên virtual interface (uap0) để không ảnh hưởng WiFi scan
-# Khi tắt, AP chạy trên physical interface (wlP1p1s0) - clients sẽ bị disconnect khi scan
-USE_VIRTUAL_INTERFACE = False
-
-# Tên virtual interface cho Access Point
-VIRTUAL_INTERFACE_NAME = "uap0"
-
-# Physical interface cho WiFi scanning và station mode
-PHYSICAL_INTERFACE_NAME = "wlP1p1s0"  # ✅ Đã cập nhật cho thiết bị của bạn
-
