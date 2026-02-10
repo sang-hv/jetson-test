@@ -43,9 +43,13 @@ from config import (
     STATUS_CHAR_UUID,
     WIFI_SCAN_CHAR_UUID,
     WIFI_LIST_CHAR_UUID,
+    PIN_CHAR_UUID,
+    AUTH_STATUS_CHAR_UUID,
     WiFiStatus,
     WiFiScanStatus,
+    AuthStatus,
     WIFI_SCAN_MAX_NETWORKS,
+    PIN_CODE,
     LOG_LEVEL,
     LOG_FILE
 )
@@ -392,21 +396,24 @@ if DBUS_AVAILABLE:
     class SSIDCharacteristic(Characteristic):
         """
         Characteristic để nhận SSID từ Mobile App.
-        
+
         Flags: write, write-without-response
         """
-        
-        def __init__(self, bus, index, service, wifi_setup_handler):
+
+        def __init__(self, bus, index, service, wifi_setup_handler, auth_manager):
             Characteristic.__init__(
                 self, bus, index, SSID_CHAR_UUID,
                 ['write', 'write-without-response'],
                 service
             )
             self.wifi_setup_handler = wifi_setup_handler
+            self.auth_manager = auth_manager
             logger.info(f"Tạo SSID Characteristic: {SSID_CHAR_UUID}")
 
         def WriteValue(self, value, options):
-            # Chuyển bytes thành string
+            if not self.auth_manager.is_authenticated:
+                logger.warning("SSID write bị từ chối: chưa xác thực")
+                return
             ssid = bytes(value).decode('utf-8')
             logger.info(f"Nhận SSID: {ssid}")
             self.wifi_setup_handler.set_ssid(ssid)
@@ -415,23 +422,26 @@ if DBUS_AVAILABLE:
     class PasswordCharacteristic(Characteristic):
         """
         Characteristic để nhận Password từ Mobile App.
-        
+
         Flags: write, write-without-response
         """
-        
-        def __init__(self, bus, index, service, wifi_setup_handler):
+
+        def __init__(self, bus, index, service, wifi_setup_handler, auth_manager):
             Characteristic.__init__(
                 self, bus, index, PWD_CHAR_UUID,
                 ['write', 'write-without-response'],
                 service
             )
             self.wifi_setup_handler = wifi_setup_handler
+            self.auth_manager = auth_manager
             logger.info(f"Tạo Password Characteristic: {PWD_CHAR_UUID}")
 
         def WriteValue(self, value, options):
-            # Chuyển bytes thành string
+            if not self.auth_manager.is_authenticated:
+                logger.warning("Password write bị từ chối: chưa xác thực")
+                return
             password = bytes(value).decode('utf-8')
-            logger.info(f"Nhận Password: {'*' * len(password)}")  # Ẩn mật khẩu trong log
+            logger.info(f"Nhận Password: {'*' * len(password)}")
             self.wifi_setup_handler.set_password(password)
 
 
@@ -472,34 +482,35 @@ if DBUS_AVAILABLE:
     class WiFiScanCharacteristic(Characteristic):
         """
         Characteristic để nhận lệnh scan WiFi từ Mobile App.
-        
+
         Flags: write, write-without-response
-        
+
         Giá trị ghi:
         - 1: Bắt đầu scan WiFi
         - 0: Hủy scan (nếu đang scan)
         """
-        
-        def __init__(self, bus, index, service, wifi_scan_handler):
+
+        def __init__(self, bus, index, service, wifi_scan_handler, auth_manager):
             Characteristic.__init__(
                 self, bus, index, WIFI_SCAN_CHAR_UUID,
                 ['write', 'write-without-response'],
                 service
             )
             self.wifi_scan_handler = wifi_scan_handler
+            self.auth_manager = auth_manager
             logger.info(f"Tạo WiFi Scan Characteristic: {WIFI_SCAN_CHAR_UUID}")
 
         def WriteValue(self, value, options):
-            # Đọc command từ app
+            if not self.auth_manager.is_authenticated:
+                logger.warning("WiFi scan write bị từ chối: chưa xác thực")
+                return
             if len(value) > 0:
                 command = value[0]
                 logger.info(f"Nhận lệnh scan WiFi: {command}")
-                
+
                 if command == 1:
-                    # Bắt đầu scan
                     self.wifi_scan_handler.start_scan()
                 elif command == 0:
-                    # Hủy scan
                     self.wifi_scan_handler.cancel_scan()
 
 
@@ -556,41 +567,99 @@ if DBUS_AVAILABLE:
             return dbus.Array(self.value, signature='y')
 
 
+    class PINCharacteristic(Characteristic):
+        """
+        Characteristic để nhận mã PIN xác thực từ Mobile App.
+
+        Flags: write
+
+        Client gửi 6 chữ số dưới dạng UTF-8 string.
+        """
+
+        def __init__(self, bus, index, service, auth_manager):
+            Characteristic.__init__(
+                self, bus, index, PIN_CHAR_UUID,
+                ['write'],
+                service
+            )
+            self.auth_manager = auth_manager
+            logger.info(f"Tạo PIN Characteristic: {PIN_CHAR_UUID}")
+
+        def WriteValue(self, value, options):
+            pin = bytes(value).decode('utf-8').strip()
+            logger.info(f"Nhận PIN: {'*' * len(pin)}")
+            self.auth_manager.verify_pin(pin)
+
+
+    class AuthStatusCharacteristic(Characteristic):
+        """
+        Characteristic thông báo trạng thái xác thực.
+
+        Flags: read, notify
+
+        Giá trị:
+        - 0: UNAUTHENTICATED - Chưa xác thực
+        - 1: AUTHENTICATED - Đã xác thực
+        - 2: INVALID_PIN - PIN sai
+        """
+
+        def __init__(self, bus, index, service):
+            Characteristic.__init__(
+                self, bus, index, AUTH_STATUS_CHAR_UUID,
+                ['read', 'notify'],
+                service
+            )
+            self.value = [AuthStatus.UNAUTHENTICATED]
+            logger.info(f"Tạo Auth Status Characteristic: {AUTH_STATUS_CHAR_UUID}")
+
+        def set_auth_status(self, status: int):
+            logger.info(f"Cập nhật auth status: {status}")
+            self.value = [status]
+            self.notify_value(self.value)
+
+
     class WiFiSetupService(Service):
         """
         GATT Service chính cho WiFi Setup.
-        
-        Chứa 5 characteristics:
+
+        Chứa 7 characteristics:
         - SSID (write): Nhận tên WiFi từ app
         - Password (write): Nhận mật khẩu WiFi từ app
         - Status (read, notify): Trạng thái kết nối WiFi
         - WiFi Scan (write): Trigger scan WiFi
         - WiFi List (read, notify): Danh sách mạng WiFi
+        - PIN (write): Nhận mã PIN xác thực
+        - Auth Status (read, notify): Trạng thái xác thực
         """
-        
-        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler):
+
+        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler, auth_manager):
             Service.__init__(self, bus, index, SERVICE_UUID, True)
-            
-            # Tạo các characteristics cũ
-            self.ssid_chrc = SSIDCharacteristic(bus, 0, self, wifi_setup_handler)
-            self.pwd_chrc = PasswordCharacteristic(bus, 1, self, wifi_setup_handler)
+
+            # Characteristics cho WiFi
+            self.ssid_chrc = SSIDCharacteristic(bus, 0, self, wifi_setup_handler, auth_manager)
+            self.pwd_chrc = PasswordCharacteristic(bus, 1, self, wifi_setup_handler, auth_manager)
             self.status_chrc = StatusCharacteristic(bus, 2, self)
-            
-            # Tạo các characteristics mới cho WiFi Scan
-            self.wifi_scan_chrc = WiFiScanCharacteristic(bus, 3, self, wifi_scan_handler)
+            self.wifi_scan_chrc = WiFiScanCharacteristic(bus, 3, self, wifi_scan_handler, auth_manager)
             self.wifi_list_chrc = WiFiListCharacteristic(bus, 4, self)
-            
+
+            # Characteristics cho PIN Authentication
+            self.pin_chrc = PINCharacteristic(bus, 5, self, auth_manager)
+            self.auth_status_chrc = AuthStatusCharacteristic(bus, 6, self)
+
             # Thêm tất cả vào service
             self.add_characteristic(self.ssid_chrc)
             self.add_characteristic(self.pwd_chrc)
             self.add_characteristic(self.status_chrc)
             self.add_characteristic(self.wifi_scan_chrc)
             self.add_characteristic(self.wifi_list_chrc)
-            
+            self.add_characteristic(self.pin_chrc)
+            self.add_characteristic(self.auth_status_chrc)
+
             # Lưu reference để cập nhật status
             wifi_setup_handler.status_chrc = self.status_chrc
             wifi_scan_handler.wifi_list_chrc = self.wifi_list_chrc
-            
+            auth_manager.auth_status_chrc = self.auth_status_chrc
+
             logger.info(f"Tạo WiFi Setup Service: {SERVICE_UUID}")
 
 
@@ -773,6 +842,61 @@ class WiFiScanHandler:
 
 
 # =============================================================================
+# AUTH MANAGER
+# =============================================================================
+
+class AuthManager:
+    """
+    Quản lý xác thực PIN cho kết nối BLE.
+
+    Dùng mã PIN cố định từ config.py, xác minh PIN từ client,
+    và quản lý trạng thái authenticated.
+    """
+
+    def __init__(self):
+        self._pin: str = PIN_CODE
+        self._authenticated: bool = False
+        self.auth_status_chrc = None  # Sẽ được set bởi WiFiSetupService
+
+    @property
+    def pin(self) -> str:
+        return self._pin
+
+    @property
+    def is_authenticated(self) -> bool:
+        return self._authenticated
+
+    def verify_pin(self, submitted_pin: str) -> int:
+        """
+        Xác minh PIN từ client.
+
+        Returns: AuthStatus value
+        """
+        if submitted_pin == self._pin:
+            self._authenticated = True
+            logger.info("PIN xác thực thành công")
+            self._notify_status(AuthStatus.AUTHENTICATED)
+            return AuthStatus.AUTHENTICATED
+        else:
+            logger.warning(f"PIN sai")
+            self._notify_status(AuthStatus.INVALID_PIN)
+            return AuthStatus.INVALID_PIN
+
+    def reset(self):
+        """Reset auth state (gọi khi client disconnect). PIN không đổi."""
+        self._authenticated = False
+        if self.auth_status_chrc:
+            self._notify_status(AuthStatus.UNAUTHENTICATED)
+
+    def _notify_status(self, status: int):
+        """Gửi notification auth status qua BLE."""
+        if self.auth_status_chrc:
+            GLib.idle_add(
+                lambda s=status: self.auth_status_chrc.set_auth_status(s)
+            )
+
+
+# =============================================================================
 # BLE SERVER
 # =============================================================================
 
@@ -794,6 +918,7 @@ class BLEServer:
         self.app = None
         self.wifi_handler = None
         self.wifi_scan_handler = None
+        self.auth_manager = None
         
     def _find_adapter(self):
         """Tìm BLE adapter (hciX)."""
@@ -840,15 +965,20 @@ class BLEServer:
             # Tạo main loop
             self.mainloop = GLib.MainLoop()
             
+            # Tạo Auth Manager (sinh mã PIN)
+            self.auth_manager = AuthManager()
+
             # Tạo WiFi handler
             self.wifi_handler = WiFiSetupHandler(self.mainloop)
-            
+
             # Tạo WiFi Scan handler
             self.wifi_scan_handler = WiFiScanHandler()
-            
+
             # Tạo và đăng ký Application (GATT Services)
             self.app = Application(self.bus)
-            wifi_service = WiFiSetupService(self.bus, 0, self.wifi_handler, self.wifi_scan_handler)
+            wifi_service = WiFiSetupService(
+                self.bus, 0, self.wifi_handler, self.wifi_scan_handler, self.auth_manager
+            )
             self.app.add_service(wifi_service)
             
             # Đăng ký GATT
@@ -879,8 +1009,14 @@ class BLEServer:
             logger.info(f"BLE Server đã khởi động")
             logger.info(f"Tên thiết bị: {BLE_DEVICE_NAME}")
             logger.info(f"Service UUID: {SERVICE_UUID}")
+            logger.info(f"PIN CODE: {self.auth_manager.pin}")
             logger.info("Đang chờ kết nối từ Mobile App...")
             logger.info("=" * 50)
+
+            # In PIN ra stdout để dễ nhìn
+            print("\n" + "=" * 50)
+            print(f"  PIN CODE: {self.auth_manager.pin}")
+            print("=" * 50 + "\n")
             
             # Chạy main loop
             self.mainloop.run()

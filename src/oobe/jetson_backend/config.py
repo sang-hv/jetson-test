@@ -35,6 +35,13 @@ STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3"   # Trạng thái kế
 WIFI_SCAN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef4"   # Write: trigger scan WiFi
 WIFI_LIST_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef5"   # Read/Notify: danh sách WiFi (JSON)
 
+# UUID cho PIN Verification (xác thực kết nối)
+PIN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef6"         # Write: gửi PIN code
+AUTH_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef7"  # Read/Notify: trạng thái xác thực
+
+# Mã PIN cố định cho xác thực kết nối BLE
+PIN_CODE = "123456"
+
 # =============================================================================
 # TRẠNG THÁI KẾT NỐI WIFI
 # =============================================================================
@@ -59,6 +66,16 @@ class WiFiScanStatus:
     SCANNING = 1         # Đang scan
     COMPLETED = 2        # Scan hoàn tất
     ERROR = 3            # Lỗi khi scan
+
+
+class AuthStatus:
+    """
+    Enum cho các trạng thái xác thực PIN.
+    Được gửi qua AUTH_STATUS_CHAR để thông báo cho Mobile App.
+    """
+    UNAUTHENTICATED = 0  # Chưa xác thực, chờ nhập PIN
+    AUTHENTICATED = 1    # Xác thực thành công
+    INVALID_PIN = 2      # PIN sai
 
 
 # Cấu hình WiFi Scan
