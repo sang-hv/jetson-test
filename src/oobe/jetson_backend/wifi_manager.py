@@ -67,6 +67,80 @@ def check_internet_connection() -> bool:
         return False
 
 
+def get_network_status() -> dict:
+    """
+    Kiểm tra trạng thái kết nối mạng hiện tại của hệ thống.
+
+    Phát hiện:
+    - Có kết nối internet không (TCP check to 8.8.8.8:53)
+    - Loại kết nối: wifi, ethernet, cellular, none
+    - Interface đang sử dụng
+    - Chi tiết kết nối (SSID nếu WiFi, tên connection nếu khác)
+
+    Returns:
+        dict: {"connected": bool, "type": str, "interface": str, "details": str}
+    """
+    result = {
+        "connected": False,
+        "type": "none",
+        "interface": "",
+        "details": ""
+    }
+
+    try:
+        # Dùng nmcli để lấy danh sách thiết bị mạng và trạng thái
+        cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        if proc.returncode != 0:
+            logger.error(f"nmcli device error: {proc.stderr}")
+            return result
+
+        # Parse các kết nối đang active
+        active_connections = []
+        for line in proc.stdout.strip().split('\n'):
+            parts = line.split(':')
+            if len(parts) >= 4 and parts[2] == "connected":
+                active_connections.append({
+                    "device": parts[0],
+                    "type": parts[1],       # wifi, ethernet, gsm, etc.
+                    "connection": parts[3]
+                })
+
+        if not active_connections:
+            logger.info("Không có kết nối mạng nào đang active")
+            return result
+
+        # Map nmcli types sang ConnectionType và sắp xếp theo ưu tiên
+        type_priority = {"ethernet": 1, "wifi": 2, "gsm": 3}
+        type_map = {"ethernet": "ethernet", "wifi": "wifi", "gsm": "cellular"}
+
+        # Ưu tiên: ethernet > wifi > cellular
+        active_connections.sort(
+            key=lambda c: type_priority.get(c["type"], 99)
+        )
+
+        primary = active_connections[0]
+        result["type"] = type_map.get(primary["type"], primary["type"])
+        result["interface"] = primary["device"]
+        result["details"] = primary["connection"]
+
+        # Kiểm tra internet thực tế
+        result["connected"] = check_internet_connection()
+
+        logger.info(f"Network status: type={result['type']}, "
+                     f"interface={result['interface']}, "
+                     f"connected={result['connected']}, "
+                     f"details={result['details']}")
+
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout khi kiểm tra trạng thái mạng")
+    except Exception as e:
+        logger.error(f"Lỗi khi kiểm tra trạng thái mạng: {e}")
+
+    return result
+
+
 def scan_wifi_networks() -> List[dict]:
     """
     Quét và trả về danh sách các mạng WiFi khả dụng.

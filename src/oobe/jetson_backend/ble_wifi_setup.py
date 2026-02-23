@@ -45,9 +45,13 @@ from config import (
     WIFI_LIST_CHAR_UUID,
     PIN_CHAR_UUID,
     AUTH_STATUS_CHAR_UUID,
+    NET_CHECK_CHAR_UUID,
+    NET_STATUS_CHAR_UUID,
     WiFiStatus,
     WiFiScanStatus,
     AuthStatus,
+    NetCheckStatus,
+    ConnectionType,
     WIFI_SCAN_MAX_NETWORKS,
     PIN_CODE,
     LOG_LEVEL,
@@ -55,7 +59,7 @@ from config import (
 )
 
 # Import các module khác
-from wifi_manager import check_internet_connection, connect_wifi, scan_wifi_networks
+from wifi_manager import check_internet_connection, connect_wifi, scan_wifi_networks, get_network_status
 from gpio_handler import get_gpio_handler
 
 # Thử import thư viện BLE
@@ -618,11 +622,98 @@ if DBUS_AVAILABLE:
             self.notify_value(self.value)
 
 
+    class NetCheckCharacteristic(Characteristic):
+        """
+        Characteristic để nhận lệnh kiểm tra trạng thái mạng từ Mobile App.
+
+        Flags: write, write-without-response
+
+        Giá trị ghi:
+        - 1: Bắt đầu kiểm tra mạng
+        """
+
+        def __init__(self, bus, index, service, net_status_handler, auth_manager):
+            Characteristic.__init__(
+                self, bus, index, NET_CHECK_CHAR_UUID,
+                ['write', 'write-without-response'],
+                service
+            )
+            self.net_status_handler = net_status_handler
+            self.auth_manager = auth_manager
+            logger.info(f"Tạo Net Check Characteristic: {NET_CHECK_CHAR_UUID}")
+
+        def WriteValue(self, value, options):
+            if not self.auth_manager.is_authenticated:
+                logger.warning("Net check write bị từ chối: chưa xác thực")
+                return
+            if len(value) > 0 and value[0] == 1:
+                logger.info("Nhận lệnh kiểm tra mạng")
+                self.net_status_handler.start_check()
+
+
+    class NetStatusCharacteristic(Characteristic):
+        """
+        Characteristic để gửi trạng thái mạng về Mobile App.
+
+        Flags: read, notify
+
+        Giá trị:
+        - JSON string chứa thông tin mạng
+        - Format: {"status": 0-3, "connected": bool, "type": str, "interface": str, "details": str}
+        """
+
+        def __init__(self, bus, index, service):
+            Characteristic.__init__(
+                self, bus, index, NET_STATUS_CHAR_UUID,
+                ['read', 'notify'],
+                service
+            )
+            self._set_initial_value()
+            logger.info(f"Tạo Net Status Characteristic: {NET_STATUS_CHAR_UUID}")
+
+        def _set_initial_value(self):
+            """Set giá trị khởi tạo."""
+            initial_data = {
+                "status": NetCheckStatus.IDLE,
+                "connected": False,
+                "type": ConnectionType.NONE,
+                "interface": "",
+                "details": ""
+            }
+            self.value = list(json.dumps(initial_data).encode('utf-8'))
+
+        def set_net_status(self, status: int, net_info: dict = None):
+            """
+            Cập nhật trạng thái mạng.
+
+            Args:
+                status: Một trong các giá trị NetCheckStatus
+                net_info: Dict với keys: connected, type, interface, details
+            """
+            data = {
+                "status": status,
+                "connected": net_info.get("connected", False) if net_info else False,
+                "type": net_info.get("type", ConnectionType.NONE) if net_info else ConnectionType.NONE,
+                "interface": net_info.get("interface", "") if net_info else "",
+                "details": net_info.get("details", "") if net_info else ""
+            }
+            json_str = json.dumps(data, ensure_ascii=False)
+            logger.info(f"Cập nhật net status: connected={data['connected']}, type={data['type']}")
+
+            self.value = list(json_str.encode('utf-8'))
+            self.notify_value(self.value)
+
+        def ReadValue(self, options):
+            """Đọc giá trị hiện tại."""
+            logger.debug("Đọc net status characteristic")
+            return dbus.Array(self.value, signature='y')
+
+
     class WiFiSetupService(Service):
         """
         GATT Service chính cho WiFi Setup.
 
-        Chứa 7 characteristics:
+        Chứa 9 characteristics:
         - SSID (write): Nhận tên WiFi từ app
         - Password (write): Nhận mật khẩu WiFi từ app
         - Status (read, notify): Trạng thái kết nối WiFi
@@ -630,9 +721,11 @@ if DBUS_AVAILABLE:
         - WiFi List (read, notify): Danh sách mạng WiFi
         - PIN (write): Nhận mã PIN xác thực
         - Auth Status (read, notify): Trạng thái xác thực
+        - Net Check (write): Trigger kiểm tra mạng
+        - Net Status (read, notify): Trạng thái mạng hiện tại
         """
 
-        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler, auth_manager):
+        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler, auth_manager, net_status_handler):
             Service.__init__(self, bus, index, SERVICE_UUID, True)
 
             # Characteristics cho WiFi
@@ -646,6 +739,10 @@ if DBUS_AVAILABLE:
             self.pin_chrc = PINCharacteristic(bus, 5, self, auth_manager)
             self.auth_status_chrc = AuthStatusCharacteristic(bus, 6, self)
 
+            # Characteristics cho Network Status Check
+            self.net_check_chrc = NetCheckCharacteristic(bus, 7, self, net_status_handler, auth_manager)
+            self.net_status_chrc = NetStatusCharacteristic(bus, 8, self)
+
             # Thêm tất cả vào service
             self.add_characteristic(self.ssid_chrc)
             self.add_characteristic(self.pwd_chrc)
@@ -654,11 +751,14 @@ if DBUS_AVAILABLE:
             self.add_characteristic(self.wifi_list_chrc)
             self.add_characteristic(self.pin_chrc)
             self.add_characteristic(self.auth_status_chrc)
+            self.add_characteristic(self.net_check_chrc)
+            self.add_characteristic(self.net_status_chrc)
 
             # Lưu reference để cập nhật status
             wifi_setup_handler.status_chrc = self.status_chrc
             wifi_scan_handler.wifi_list_chrc = self.wifi_list_chrc
             auth_manager.auth_status_chrc = self.auth_status_chrc
+            net_status_handler.net_status_chrc = self.net_status_chrc
 
             logger.info(f"Tạo WiFi Setup Service: {SERVICE_UUID}")
 
@@ -842,6 +942,74 @@ class WiFiScanHandler:
 
 
 # =============================================================================
+# NET STATUS HANDLER
+# =============================================================================
+
+class NetStatusHandler:
+    """
+    Handler xử lý việc kiểm tra trạng thái mạng.
+
+    Nhận lệnh kiểm tra từ BLE, thực hiện kiểm tra mạng
+    và gửi kết quả về qua Net Status Characteristic.
+    """
+
+    def __init__(self):
+        self.net_status_chrc = None  # Sẽ được set bởi WiFiSetupService
+        self._check_thread: Optional[threading.Thread] = None
+        self._checking = False
+
+    def start_check(self):
+        """Bắt đầu kiểm tra trạng thái mạng."""
+        if self._checking:
+            logger.warning("Đang kiểm tra mạng, bỏ qua yêu cầu mới")
+            return
+
+        self._checking = True
+        self._check_thread = threading.Thread(
+            target=self._perform_check,
+            daemon=True
+        )
+        self._check_thread.start()
+
+    def _perform_check(self):
+        """
+        Thực hiện kiểm tra mạng.
+
+        Được chạy trong thread riêng để không block BLE.
+        """
+        logger.info("Bắt đầu kiểm tra trạng thái mạng...")
+
+        # Thông báo đang kiểm tra
+        if self.net_status_chrc:
+            GLib.idle_add(
+                lambda: self.net_status_chrc.set_net_status(NetCheckStatus.CHECKING)
+            )
+
+        try:
+            # Thực hiện kiểm tra
+            net_info = get_network_status()
+
+            logger.info(f"Kiểm tra hoàn tất: connected={net_info['connected']}, type={net_info['type']}")
+
+            # Gửi kết quả về app
+            if self.net_status_chrc:
+                GLib.idle_add(
+                    lambda info=net_info: self.net_status_chrc.set_net_status(
+                        NetCheckStatus.COMPLETED, info
+                    )
+                )
+
+        except Exception as e:
+            logger.error(f"Lỗi khi kiểm tra mạng: {e}")
+            if self.net_status_chrc:
+                GLib.idle_add(
+                    lambda: self.net_status_chrc.set_net_status(NetCheckStatus.ERROR)
+                )
+        finally:
+            self._checking = False
+
+
+# =============================================================================
 # AUTH MANAGER
 # =============================================================================
 
@@ -919,6 +1087,7 @@ class BLEServer:
         self.wifi_handler = None
         self.wifi_scan_handler = None
         self.auth_manager = None
+        self.net_status_handler = None
         
     def _find_adapter(self):
         """Tìm BLE adapter (hciX)."""
@@ -974,10 +1143,14 @@ class BLEServer:
             # Tạo WiFi Scan handler
             self.wifi_scan_handler = WiFiScanHandler()
 
+            # Tạo Net Status handler
+            self.net_status_handler = NetStatusHandler()
+
             # Tạo và đăng ký Application (GATT Services)
             self.app = Application(self.bus)
             wifi_service = WiFiSetupService(
-                self.bus, 0, self.wifi_handler, self.wifi_scan_handler, self.auth_manager
+                self.bus, 0, self.wifi_handler, self.wifi_scan_handler,
+                self.auth_manager, self.net_status_handler
             )
             self.app.add_service(wifi_service)
             
@@ -1017,7 +1190,11 @@ class BLEServer:
             print("\n" + "=" * 50)
             print(f"  PIN CODE: {self.auth_manager.pin}")
             print("=" * 50 + "\n")
-            
+
+            # Tự động kiểm tra trạng thái mạng khi khởi động
+            logger.info("Tự động kiểm tra trạng thái mạng...")
+            self.net_status_handler.start_check()
+
             # Chạy main loop
             self.mainloop.run()
             

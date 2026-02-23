@@ -39,6 +39,10 @@ WIFI_LIST_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef5"   # Read/Notify: da
 PIN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef6"         # Write: gửi PIN code
 AUTH_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef7"  # Read/Notify: trạng thái xác thực
 
+# UUID cho Network Status Check (kiểm tra trạng thái mạng hiện tại)
+NET_CHECK_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef8"   # Write: trigger kiểm tra mạng
+NET_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef9"  # Read/Notify: trạng thái mạng (JSON)
+
 # Mã PIN cố định cho xác thực kết nối BLE
 PIN_CODE = "123456"
 
@@ -76,6 +80,27 @@ class AuthStatus:
     UNAUTHENTICATED = 0  # Chưa xác thực, chờ nhập PIN
     AUTHENTICATED = 1    # Xác thực thành công
     INVALID_PIN = 2      # PIN sai
+
+
+class NetCheckStatus:
+    """
+    Enum cho trạng thái kiểm tra mạng.
+    Được gửi kèm với thông tin mạng qua NET_STATUS_CHAR.
+    """
+    IDLE = 0             # Chưa kiểm tra
+    CHECKING = 1         # Đang kiểm tra
+    COMPLETED = 2        # Kiểm tra hoàn tất
+    ERROR = 3            # Lỗi khi kiểm tra
+
+
+class ConnectionType:
+    """
+    Enum cho loại kết nối mạng.
+    """
+    NONE = "none"
+    WIFI = "wifi"
+    ETHERNET = "ethernet"
+    CELLULAR = "cellular"
 
 
 # Cấu hình WiFi Scan
