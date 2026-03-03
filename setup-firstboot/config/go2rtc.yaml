@@ -1,0 +1,11 @@
+streams:
+  # ===== USB CAMERA + MIC (auto-detect) =====
+  camera:
+    - exec:bash /opt/stream/start-stream.sh
+
+api:
+  listen: ":1984"
+  origin: "*" 
+
+log:
+  level: info

@@ -1,0 +1,22 @@
+[Unit]
+Description=Audio Backchannel Server for go2rtc
+After=network.target sound.target pulseaudio.service
+
+[Service]
+Type=simple
+User=jetson
+Group=audio
+WorkingDirectory=/opt/backchannel
+ExecStart=/bin/bash /opt/backchannel/start.sh
+Restart=always
+RestartSec=5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

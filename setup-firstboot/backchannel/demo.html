@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>go2rtc Viewer + Audio Backchannel</title>
+    <style>
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-card: #16213e;
+            --accent: #e94560;
+            --accent-secondary: #0f3460;
+            --text-primary: #eaeaea;
+            --text-secondary: #a0a0a0;
+            --success: #00d9a5;
+            --warning: #ffc107;
+            --error: #ff4757;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2rem;
+            background: linear-gradient(90deg, var(--accent), #ff6b8a);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .panel h2 {
+            font-size: 1.2rem;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .panel h2 .icon {
+            font-size: 1.5rem;
+        }
+
+        /* Video Player */
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+        }
+
+        #videoPlayer {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Config Form */
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        input[type="text"] {
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.2);
+        }
+
+        /* Buttons */
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #ff6b8a);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(233, 69, 96, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--accent-secondary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: #1a4a7a;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--success), #00f5b8);
+            color: #0f0f1a;
+        }
+
+        .btn-danger {
+            background: var(--error);
+            color: white;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        /* Audio Backchannel */
+        .backchannel-controls {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        #micButton {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            font-size: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+
+        #micButton.active {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(0, 217, 165, 0.4);
+            }
+
+            50% {
+                box-shadow: 0 0 0 20px rgba(0, 217, 165, 0);
+            }
+        }
+
+        .audio-meter {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .meter-bar {
+            height: 8px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .meter-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--success), var(--warning), var(--error));
+            transition: width 0.1s;
+            border-radius: 4px;
+        }
+
+        /* Status */
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+        }
+
+        .status-dot.connected {
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        .status-dot.error {
+            background: var(--error);
+        }
+
+        /* Log */
+        .log-container {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 16px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.85rem;
+        }
+
+        .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            color: var(--text-secondary);
+            margin-right: 10px;
+        }
+
+        .log-info {
+            color: var(--text-primary);
+        }
+
+        .log-success {
+            color: var(--success);
+        }
+
+        .log-error {
+            color: var(--error);
+        }
+
+        .log-warning {
+            color: var(--warning);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🎥 go2rtc Viewer + 🎤 Audio Backchannel</h1>
+
+        <!-- Configuration Panel -->
+        <div class="panel">
+            <h2><span class="icon">⚙️</span> Configuration</h2>
+            <div class="config-grid">
+                <div class="form-group">
+                    <label for="go2rtcUrl">go2rtc Server URL</label>
+                    <input type="text" id="go2rtcUrl" placeholder="wss://your-domain/api/ws?src=camera"
+                        value="wss://avisaitest-nginx001.wpstories.org/api/ws?src=camera">
+                </div>
+                <div class="form-group">
+                    <label for="backchannelUrl">Backchannel Server URL</label>
+                    <input type="text" id="backchannelUrl" placeholder="wss://your-domain/backchannel"
+                        value="wss://avisaitest-nginx001.wpstories.org/backchannel">
+                </div>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" id="connectBtn" onclick="connectStream()">
+                    ▶️ Connect Stream
+                </button>
+                <button class="btn btn-secondary" id="disconnectBtn" onclick="disconnectStream()" disabled>
+                    ⏹️ Disconnect
+                </button>
+            </div>
+        </div>
+
+        <!-- Video Panel -->
+        <div class="panel">
+            <h2><span class="icon">📺</span> Live Stream (MSE)</h2>
+            <div class="video-container">
+                <video-stream id="videoPlayer" mode="mse" background="true"></video-stream>
+            </div>
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-dot" id="streamStatus"></div>
+                    <span id="streamStatusText">Disconnected</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Audio Backchannel Panel -->
+        <div class="panel">
+            <h2><span class="icon">🎤</span> Audio Backchannel (Push to Talk)</h2>
+            <div class="backchannel-controls">
+                <button class="btn btn-success" id="micButton" onclick="toggleMicrophone()" disabled>
+                    🎤
+                </button>
+                <div class="audio-meter">
+                    <label>Audio Level</label>
+                    <div class="meter-bar">
+                        <div class="meter-fill" id="audioMeter"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-dot" id="backchannelStatus"></div>
+                    <span id="backchannelStatusText">Not connected</span>
+                </div>
+            </div>
+            <p style="margin-top: 12px; color: var(--text-secondary); font-size: 0.85rem;">
+                💡 Click the microphone button to start/stop sending audio to the Jetson Nano speaker
+            </p>
+        </div>
+
+        <!-- Log Panel -->
+        <div class="panel">
+            <h2><span class="icon">📋</span> Activity Log</h2>
+            <div class="log-container" id="logContainer"></div>
+        </div>
+    </div>
+
+    <script type="module" src="./video-stream.js"></script>
+    <script>
+        // ==================== STATE ====================
+        let backchannelWs = null;
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let audioContext = null;
+        let analyser = null;
+        let isMicActive = false;
+
+        // ==================== LOGGING ====================
+        function log(message, type = 'info') {
+            const container = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">${message}</span>`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateStatus(elementId, textId, connected, text) {
+            const dot = document.getElementById(elementId);
+            const textEl = document.getElementById(textId);
+            dot.className = 'status-dot' + (connected ? ' connected' : (connected === false ? ' error' : ''));
+            textEl.textContent = text;
+        }
+
+        // ==================== MSE STREAM ====================
+        async function connectStream() {
+            const url = document.getElementById('go2rtcUrl').value;
+            log(`Connecting to go2rtc: ${url}`);
+
+            try {
+                // Use video-stream component
+                const videoStream = document.getElementById('videoPlayer');
+                videoStream.src = url;
+
+                // Update UI
+                updateStatus('streamStatus', 'streamStatusText', true, 'Connected');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('micButton').disabled = false;
+
+                log('Stream connected', 'success');
+
+                // Connect backchannel
+                connectBackchannel();
+            } catch (error) {
+                log(`Connection error: ${error.message}`, 'error');
+                updateStatus('streamStatus', 'streamStatusText', false, 'Error');
+            }
+        }
+
+
+        function disconnectStream() {
+            const videoStream = document.getElementById('videoPlayer');
+            if (videoStream) {
+                videoStream.src = '';
+            }
+
+            if (backchannelWs) {
+                backchannelWs.close();
+                backchannelWs = null;
+            }
+            if (isMicActive) {
+                toggleMicrophone();
+            }
+
+            document.getElementById('connectBtn').disabled = false;
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('micButton').disabled = true;
+            updateStatus('streamStatus', 'streamStatusText', null, 'Disconnected');
+            updateStatus('backchannelStatus', 'backchannelStatusText', null, 'Not connected');
+            log('Disconnected from all services');
+        }
+
+        // ==================== AUDIO BACKCHANNEL (RAW PCM) ====================
+        function connectBackchannel() {
+            const url = document.getElementById('backchannelUrl').value;
+            log(`Connecting backchannel: ${url}`);
+
+            backchannelWs = new WebSocket(url);
+            backchannelWs.binaryType = 'arraybuffer';
+
+            backchannelWs.onopen = () => {
+                log('Backchannel WebSocket connected', 'success');
+                updateStatus('backchannelStatus', 'backchannelStatusText', true, 'Ready');
+            };
+
+            backchannelWs.onerror = () => {
+                log('Backchannel connection error', 'error');
+                updateStatus('backchannelStatus', 'backchannelStatusText', false, 'Error');
+            };
+
+            backchannelWs.onclose = () => {
+                log('Backchannel disconnected', 'warning');
+                updateStatus('backchannelStatus', 'backchannelStatusText', null, 'Disconnected');
+            };
+        }
+
+        async function toggleMicrophone() {
+            const micBtn = document.getElementById('micButton');
+
+            if (!isMicActive) {
+                // Start microphone
+                try {
+                    // Request 48kHz Mono audio (native browser rate)
+                    mediaStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            sampleRate: 48000,
+                            channelCount: 1
+                        }
+                    });
+
+                    audioContext = new AudioContext({ sampleRate: 48000 });
+                    const source = audioContext.createMediaStreamSource(mediaStream);
+
+                    // Analyzer for visual meter
+                    analyser = audioContext.createAnalyser();
+                    analyser.fftSize = 256;
+
+                    // Processor node for raw PCM capture
+                    // bufferSize 4096 => ~85ms at 48kHz
+                    const bufferSize = 4096;
+                    const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+                    source.connect(analyser); // Connect for visualization
+                    analyser.connect(scriptNode); // Connect to processor
+                    scriptNode.connect(audioContext.destination); // Connect to destination (required for processing)
+
+                    scriptNode.onaudioprocess = (audioProcessingEvent) => {
+                        if (!backchannelWs || backchannelWs.readyState !== WebSocket.OPEN) return;
+
+                        const inputBuffer = audioProcessingEvent.inputBuffer;
+                        const inputData = inputBuffer.getChannelData(0); // Float32Array
+
+                        // Convert Float32 to Int16 PCM
+                        const pcmData = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            // Clamp value to -1.0 to 1.0
+                            let s = Math.max(-1, Math.min(1, inputData[i]));
+                            // Scale to 16-bit integer range
+                            s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                            pcmData[i] = s;
+                        }
+
+                        // Send raw bytes
+                        backchannelWs.send(pcmData.buffer);
+                    };
+
+                    isMicActive = true;
+                    micBtn.classList.add('active');
+                    micBtn.innerHTML = '🔴';
+                    updateStatus('backchannelStatus', 'backchannelStatusText', true, 'Sending Raw PCM...');
+                    log('Microphone activated - sending 48kHz Mono PCM', 'success');
+
+                    // Start visualizer loop
+                    updateAudioMeter();
+
+                } catch (error) {
+                    log(`Microphone error: ${error.message}`, 'error');
+                }
+            } else {
+                // Stop microphone
+                if (audioContext) {
+                    await audioContext.close();
+                    audioContext = null;
+                }
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                }
+
+                isMicActive = false;
+                micBtn.classList.remove('active');
+                micBtn.innerHTML = '🎤';
+                document.getElementById('audioMeter').style.width = '0%';
+                updateStatus('backchannelStatus', 'backchannelStatusText', true, 'Ready');
+                log('Microphone deactivated');
+            }
+        }
+
+        function updateAudioMeter() {
+            if (!analyser || !isMicActive) return;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+
+            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+            const percentage = Math.min(100, (average / 128) * 100);
+
+            document.getElementById('audioMeter').style.width = percentage + '%';
+
+            requestAnimationFrame(updateAudioMeter);
+        }
+
+        // ==================== INIT ====================
+        log('Application ready. Configure URLs and click Connect.');
+    </script>
+</body>
+
+</html>

@@ -18,13 +18,7 @@ sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 
 # Image/Video
-opencv-python>=4.8.0  # Hoặc dùng opencv từ JetPack
-Pillow>=10.0.0
-
-# AI/ML (cài riêng từ wheel cho Jetson)
-# torch  # Xem hướng dẫn cài từ NVIDIA
-# torchvision
-# onnxruntime-gpu
+opencv-python>=4.8.0 
 
 # Audio
 sounddevice>=0.4.0
