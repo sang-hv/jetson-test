@@ -1,2 +1,5 @@
 # Ignore all files
 data/
+*.pyc
+*.pyo
+*.db*
