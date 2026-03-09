@@ -17,6 +17,15 @@ try:
 except ImportError:
     ort = None
 
+import sys
+import types
+
+# Stub out face3d to avoid Cython/numpy binary incompatibility on Jetson
+_face3d_stub = types.ModuleType("insightface.thirdparty.face3d")
+_face3d_stub.mesh = types.ModuleType("insightface.thirdparty.face3d.mesh")  # type: ignore
+sys.modules.setdefault("insightface.thirdparty.face3d", _face3d_stub)
+sys.modules.setdefault("insightface.thirdparty.face3d.mesh", _face3d_stub.mesh)
+
 from insightface.app import FaceAnalysis
 
 
