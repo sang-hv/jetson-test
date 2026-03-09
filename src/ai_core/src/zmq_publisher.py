@@ -25,6 +25,9 @@ class ZMQPublisher:
     """
 
     TOPIC = b"crossing_event"
+    STRANGER_ALERT_TOPIC = b"stranger_alert"
+    PASSERBY_TOPIC = b"passerby_event"
+    ANIMAL_ALERT_TOPIC = b"animal_alert"
 
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
@@ -47,6 +50,36 @@ class ZMQPublisher:
             pass  # No subscriber or HWM reached — safe to drop
         except Exception as exc:
             logger.warning(f"ZMQPublisher send failed: {exc}")
+
+    def send_stranger_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the stranger_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.STRANGER_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher stranger alert send failed: {exc}")
+
+    def send_passerby_event(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the passerby_event topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.PASSERBY_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher passerby event send failed: {exc}")
+
+    def send_animal_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the animal_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.ANIMAL_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher animal alert send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""

@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 from .database import FaceDatabase
-from .detector import PersonDetector, TrackedPerson
+from .detector import PersonDetector, TrackedAnimal, TrackedPerson
 from .mask_detector import MaskDetector
 from .ppe_detector import ProtectiveEquipmentDetector
 from .recognition_worker import RecognitionTask, RecognitionWorker
@@ -30,6 +30,7 @@ from .utils import (
     draw_counting_info,
     draw_counting_line,
     draw_info_overlay,
+    draw_tracked_animal,
     draw_tracked_person,
 )
 
@@ -99,6 +100,15 @@ class Config:
     counting_cleanup_max_age: int = 150
     zmq_publish_port: int = 5555
 
+    # Stranger alert settings (loaded from .env)
+    stranger_alert_enabled: bool = False
+    stranger_alert_interval: float = 10.0
+
+    # Animal detection settings (loaded from .env)
+    animal_detection_enabled: bool = False
+    animal_alert_interval: float = 10.0
+    animal_confidence_threshold: float = 0.4
+
     @classmethod
     def from_args(cls, args) -> Config:
         """
@@ -133,6 +143,15 @@ class Config:
         counting_cleanup_max_age = int(env_vars.get("COUNTING_CLEANUP_MAX_AGE", "150"))
         zmq_publish_port = int(env_vars.get("ZMQ_PUBLISH_PORT", "5555"))
 
+        # Parse stranger alert settings from .env
+        stranger_alert_enabled = env_vars.get("STRANGER_ALERT_ENABLED", "false").lower() == "true"
+        stranger_alert_interval = float(env_vars.get("STRANGER_ALERT_INTERVAL", "10"))
+
+        # Parse animal detection settings from .env
+        animal_detection_enabled = env_vars.get("ANIMAL_DETECTION_ENABLED", "false").lower() == "true"
+        animal_alert_interval = float(env_vars.get("ANIMAL_ALERT_INTERVAL", "10"))
+        animal_confidence_threshold = float(env_vars.get("ANIMAL_CONFIDENCE_THRESHOLD", "0.4"))
+
         config = cls(
             source=str(args.source),
             known_dir=args.known_dir,
@@ -161,6 +180,13 @@ class Config:
             counting_origin_direction=counting_origin_direction,
             counting_cleanup_max_age=counting_cleanup_max_age,
             zmq_publish_port=zmq_publish_port,
+            # Stranger alert from .env
+            stranger_alert_enabled=stranger_alert_enabled,
+            stranger_alert_interval=stranger_alert_interval,
+            # Animal detection from .env
+            animal_detection_enabled=animal_detection_enabled,
+            animal_alert_interval=animal_alert_interval,
+            animal_confidence_threshold=animal_confidence_threshold,
         )
 
         # Optimize for CPU inference
@@ -223,6 +249,7 @@ class Pipeline:
         print(f"Age/Gender detection: {'Enabled' if config.age_gender_enabled else 'Disabled'}")
         print(f"PPE detection (helmet/glove): {'Enabled' if config.ppe_detection_enabled else 'Disabled'}")
         print(f"People counting: {'Enabled' if config.counting_enabled else 'Disabled'}")
+        print(f"Animal detection: {'Enabled' if config.animal_detection_enabled else 'Disabled'}")
         print("-" * 60)
 
         # Initialize person detector (YOLO + ByteTrack)
@@ -230,6 +257,7 @@ class Pipeline:
             model_name=config.yolo_model,
             device=config.device,
             person_conf=config.person_conf,
+            animal_detection_enabled=config.animal_detection_enabled,
         )
 
         # Initialize track manager
@@ -272,20 +300,47 @@ class Pipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
+        # Initialize ZMQ publisher if any feature needs it
+        self.zmq_publisher = None
+        needs_zmq = config.counting_enabled or config.animal_detection_enabled
+        if needs_zmq:
+            from .zmq_publisher import ZMQPublisher
+            self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+
         # Initialize line crossing counter if enabled
         self.counter = None
-        self.zmq_publisher = None
         if config.counting_enabled:
-            from .counter import LineCrossingCounter
-            from .zmq_publisher import ZMQPublisher
+            from .counter import ZoneCounter
 
-            self.counter = LineCrossingCounter(
+            self.counter = ZoneCounter(
                 line_start=config.counting_line_start,
                 line_end=config.counting_line_end,
                 origin_direction=config.counting_origin_direction,
             )
-            self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
             print(f"People counting: Enabled (line {config.counting_line_start} -> {config.counting_line_end})")
+
+        # Initialize stranger alert manager if enabled (requires counting)
+        self.stranger_alert_manager = None
+        if config.stranger_alert_enabled and config.counting_enabled:
+            from .counter import StrangerAlertManager
+
+            self.stranger_alert_manager = StrangerAlertManager(
+                alert_interval=config.stranger_alert_interval,
+            )
+            print(f"Stranger alert: Enabled (interval={config.stranger_alert_interval}s)")
+        elif config.stranger_alert_enabled and not config.counting_enabled:
+            print("[Pipeline] WARNING: Stranger alert requires COUNTING_ENABLED=true")
+
+        # Initialize animal alert manager if enabled
+        self.animal_alert_manager = None
+        if config.animal_detection_enabled:
+            from .animal_alert import AnimalAlertManager
+
+            self.animal_alert_manager = AnimalAlertManager(
+                alert_interval=config.animal_alert_interval,
+            )
+            print(f"Animal detection: Enabled (alert interval={config.animal_alert_interval}s)")
+
         self._frame_count = 0
 
         # Load known faces database
@@ -387,18 +442,46 @@ class Pipeline:
         """
         self._frame_count += 1
 
-        # 1. Detect and track persons
-        tracked_persons: List[TrackedPerson] = self.detector.detect_and_track(frame)
+        # 1. Detect and track persons (and animals if enabled)
+        tracked_persons, tracked_animals = self.detector.detect_and_track(frame)
 
         # 2. Get active track IDs for cleanup
         active_ids = [p.track_id for p in tracked_persons]
 
-        # 2b. Update line crossing counter
+        # 2b. Update zone counter and process lost tracks
         if self.counter is not None:
-            crossings = self.counter.update(tracked_persons, frame.shape, self._frame_count)
-            self.counter.cleanup(self._frame_count, self.config.counting_cleanup_max_age)
+            track_infos = {}
+            for person in tracked_persons:
+                tid = person.track_id
+                age, gender = self.track_manager.get_age_gender(tid)
+                track_infos[tid] = {
+                    "person_id": self.track_manager.get_label(tid),
+                    "age": age,
+                    "gender": gender,
+                }
+            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos)
+            crossings, passerby_events = self.counter.process_lost_tracks(
+                active_ids, self._frame_count, self.config.counting_cleanup_max_age
+            )
             if crossings and self.zmq_publisher is not None:
                 self._publish_crossings(crossings)
+            if passerby_events and self.zmq_publisher is not None:
+                self._publish_passerby_events(passerby_events)
+
+            # 2c. Check for stranger alerts in IN zone
+            if self.stranger_alert_manager is not None:
+                in_zone_tracks = self.counter.get_tracks_in_zone("in")
+                stranger_in_zone = {}
+                for tid in in_zone_tracks:
+                    if tid not in track_infos:
+                        continue  # Skip stale/inactive tracks
+                    info = track_infos[tid]
+                    pid = info.get("person_id", "Unknown")
+                    if pid == "Unknown" or pid.endswith("?"):
+                        stranger_in_zone[tid] = info
+                alerts = self.stranger_alert_manager.update(stranger_in_zone)
+                if alerts and self.zmq_publisher is not None:
+                    self._publish_stranger_alerts(alerts)
 
         # 3. Submit recognition tasks (non-blocking)
         for person in tracked_persons:
@@ -444,6 +527,14 @@ class Pipeline:
                 glove_status=glove_status,
             )
 
+        # 4b. Process and draw animals
+        if self.animal_alert_manager is not None and tracked_animals:
+            alerts = self.animal_alert_manager.update(tracked_animals)
+            if alerts and self.zmq_publisher is not None:
+                self._publish_animal_alerts(alerts)
+            for animal in tracked_animals:
+                frame = draw_tracked_animal(frame, animal)
+
         # 5. Cleanup stale tracks
         self.track_manager.cleanup_stale_tracks(active_ids)
 
@@ -466,17 +557,59 @@ class Pipeline:
         import time as _time
         detections = []
         for event in crossings:
-            label = self.track_manager.get_label(event.track_id)
-            age, gender = self.track_manager.get_age_gender(event.track_id)
             detections.append({
                 "track_id": event.track_id,
-                "person_id": label,
+                "person_id": event.person_id,
                 "direction": event.direction,
-                "age": age,
-                "gender": gender,
+                "age": event.age,
+                "gender": event.gender,
             })
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_detection(payload)
+
+    def _publish_passerby_events(self, events) -> None:
+        """Build ZMQ payload from passerby events and publish."""
+        import time as _time
+        detections = []
+        for event in events:
+            detections.append({
+                "track_id": event.track_id,
+                "person_id": event.person_id,
+                "age": event.age,
+                "gender": event.gender,
+            })
+        payload = {"timestamp": _time.time(), "detections": detections}
+        self.zmq_publisher.send_passerby_event(payload)
+
+    def _publish_animal_alerts(self, alerts) -> None:
+        """Build ZMQ payload from animal alert events and publish."""
+        import time as _time
+        detections = []
+        for alert in alerts:
+            detections.append({
+                "track_id": alert.track_id,
+                "class_id": alert.class_id,
+                "class_name": alert.class_name,
+                "confidence": alert.confidence,
+                "alert_count": alert.alert_count,
+            })
+        payload = {"timestamp": _time.time(), "detections": detections}
+        self.zmq_publisher.send_animal_alert(payload)
+
+    def _publish_stranger_alerts(self, alerts) -> None:
+        """Build ZMQ payload from stranger alert events and publish."""
+        import time as _time
+        detections = []
+        for alert in alerts:
+            detections.append({
+                "track_id": alert.track_id,
+                "person_id": alert.person_id,
+                "age": alert.age,
+                "gender": alert.gender,
+                "alert_count": alert.alert_count,
+            })
+        payload = {"timestamp": _time.time(), "detections": detections}
+        self.zmq_publisher.send_stranger_alert(payload)
 
     def run(self) -> None:
         """

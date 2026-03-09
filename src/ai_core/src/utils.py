@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 if TYPE_CHECKING:
-    from .detector import TrackedPerson
+    from .detector import TrackedAnimal, TrackedPerson
 
 
 class FPSCounter:
@@ -263,6 +263,49 @@ def draw_tracked_person(
             glove_color,
             thickness,
         )
+
+    return frame
+
+
+def draw_tracked_animal(
+    frame: np.ndarray,
+    animal: TrackedAnimal,
+    thickness: int = 2,
+    font_scale: float = 0.6,
+) -> np.ndarray:
+    """
+    Draw bounding box and label for a tracked animal.
+
+    Args:
+        frame: Image to draw on (modified in place)
+        animal: TrackedAnimal object with bbox, class_name, track_id
+        thickness: Line thickness
+        font_scale: Font scale for text
+
+    Returns:
+        Annotated frame
+    """
+    x1, y1, x2, y2 = animal.bbox.astype(int)
+    color = (255, 0, 255)  # Magenta for animals
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+    label = f"{animal.class_name} #{animal.track_id} ({animal.confidence:.2f})"
+    (text_w, text_h), baseline = cv2.getTextSize(
+        label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+    )
+
+    label_y1 = max(0, y1 - text_h - baseline - 8)
+    cv2.rectangle(frame, (x1, label_y1), (x1 + text_w + 8, y1), color, -1)
+    cv2.putText(
+        frame,
+        label,
+        (x1 + 4, y1 - baseline - 4),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        (255, 255, 255),
+        thickness,
+    )
 
     return frame
 

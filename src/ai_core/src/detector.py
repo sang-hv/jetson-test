@@ -8,7 +8,7 @@ person detection and tracking.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Tuple
 
 import numpy as np
 from ultralytics import YOLO
@@ -45,6 +45,24 @@ class TrackedPerson:
         return (cx, cy)
 
 
+@dataclass
+class TrackedAnimal:
+    """Represents a tracked animal detection."""
+
+    track_id: int
+    bbox: np.ndarray  # [x1, y1, x2, y2] format
+    confidence: float
+    class_id: int
+    class_name: str
+
+    @property
+    def center(self) -> tuple:
+        """Center point (x, y) of bounding box."""
+        cx = (self.bbox[0] + self.bbox[2]) / 2
+        cy = (self.bbox[1] + self.bbox[3]) / 2
+        return (cx, cy)
+
+
 class PersonDetector:
     """
     YOLO-based person detector with integrated ByteTrack tracking.
@@ -60,6 +78,10 @@ class PersonDetector:
     """
 
     PERSON_CLASS_ID = 0  # COCO class index for "person"
+    ANIMAL_CLASS_IDS: Dict[int, str] = {
+        14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep",
+        19: "cow", 20: "elephant", 21: "bear", 22: "zebra", 23: "giraffe",
+    }
 
     def __init__(
         self,
@@ -67,6 +89,7 @@ class PersonDetector:
         device: str = "cpu",
         person_conf: float = 0.4,
         tracker_config: str = "bytetrack.yaml",
+        animal_detection_enabled: bool = False,
     ):
         """
         Initialize the person detector.
@@ -84,6 +107,7 @@ class PersonDetector:
         self.device = device
         self.person_conf = person_conf
         self.tracker_config = tracker_config
+        self.animal_detection_enabled = animal_detection_enabled
 
         print(f"[Detector] Loading YOLO model: {model_name} on {device}")
         self.model = YOLO(model_name)
@@ -108,9 +132,9 @@ class PersonDetector:
         self,
         frame: np.ndarray,
         persist: bool = True,
-    ) -> List[TrackedPerson]:
+    ) -> Tuple[List[TrackedPerson], List[TrackedAnimal]]:
         """
-        Detect persons in frame and track them across frames.
+        Detect persons (and optionally animals) in frame and track them.
 
         Uses YOLO for detection and ByteTrack for tracking. The `persist=True`
         flag maintains tracking state across frames for consistent track IDs.
@@ -121,20 +145,27 @@ class PersonDetector:
                     Set to True for continuous video, False to reset tracking.
 
         Returns:
-            List of TrackedPerson objects with track_id, bbox, and confidence
+            Tuple of (TrackedPerson list, TrackedAnimal list)
         """
+        # Determine which classes to detect
+        if self.animal_detection_enabled:
+            classes = [self.PERSON_CLASS_ID] + list(self.ANIMAL_CLASS_IDS.keys())
+        else:
+            classes = [self.PERSON_CLASS_ID]
+
         # Run YOLO detection with ByteTrack tracking
         results = self.model.track(
             frame,
             persist=persist,
             tracker=self.tracker_config,
             conf=self.person_conf,
-            classes=[self.PERSON_CLASS_ID],  # Only detect persons
+            classes=classes,
             device=self.device,
             verbose=False,
         )
 
         tracked_persons: List[TrackedPerson] = []
+        tracked_animals: List[TrackedAnimal] = []
 
         # Check if we have valid detections with track IDs
         if results and len(results) > 0:
@@ -146,16 +177,28 @@ class PersonDetector:
                     track_id = int(boxes.id[i].item())
                     bbox = boxes.xyxy[i].cpu().numpy()  # [x1, y1, x2, y2]
                     conf = float(boxes.conf[i].item())
+                    cls_id = int(boxes.cls[i].item())
 
-                    tracked_persons.append(
-                        TrackedPerson(
-                            track_id=track_id,
-                            bbox=bbox,
-                            confidence=conf,
+                    if cls_id == self.PERSON_CLASS_ID:
+                        tracked_persons.append(
+                            TrackedPerson(
+                                track_id=track_id,
+                                bbox=bbox,
+                                confidence=conf,
+                            )
                         )
-                    )
+                    elif cls_id in self.ANIMAL_CLASS_IDS:
+                        tracked_animals.append(
+                            TrackedAnimal(
+                                track_id=track_id,
+                                bbox=bbox,
+                                confidence=conf,
+                                class_id=cls_id,
+                                class_name=self.ANIMAL_CLASS_IDS[cls_id],
+                            )
+                        )
 
-        return tracked_persons
+        return tracked_persons, tracked_animals
 
     def detect_only(
         self,
