@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import aiosqlite
 from cachetools import TTLCache
 
-from schemas.event_models import CrossingDetection, CrossingEventPayload
+from schemas.event_models import AnimalAlertPayload, CrossingDetection, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
 
 logger = logging.getLogger(__name__)
 
@@ -83,3 +83,66 @@ async def process_event(payload: CrossingEventPayload, db: aiosqlite.Connection)
         processed += 1
 
     return {"processed": processed, "skipped": skipped}
+
+
+async def process_stranger_alert(payload: StrangerAlertPayload, db: aiosqlite.Connection) -> dict:
+    """
+    Process stranger alert events — save each alert to the stranger_alerts table.
+
+    No debounce needed: the AI service controls the repeat interval.
+    """
+    processed = 0
+    for det in payload.detections:
+        event_id = str(uuid.uuid4())
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO stranger_alerts
+                (event_id, track_id, person_id, age, gender, alert_count, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, det.track_id, det.person_id, det.age, det.gender, det.alert_count, payload.timestamp),
+        )
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        age_str = str(det.age) if det.age is not None else "?"
+        gender_str = det.gender if det.gender is not None else "?"
+        logger.info(
+            f"[STRANGER ALERT] {dt} | track_id={det.track_id} | alert #{det.alert_count} | "
+            f"age={age_str} gender={gender_str}"
+        )
+        processed += 1
+    await db.commit()
+    return {"processed": processed}
+
+
+async def process_passerby_event(payload: PasserbyEventPayload) -> dict:
+    """
+    Process passerby events — log only, no DB storage.
+
+    A passerby is a stranger who appeared and disappeared in the OUT zone.
+    """
+    processed = 0
+    for det in payload.detections:
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        age_str = str(det.age) if det.age is not None else "?"
+        gender_str = det.gender if det.gender is not None else "?"
+        logger.info(
+            f"[PASSERBY] {dt} | track_id={det.track_id} | {det.person_id} | "
+            f"age={age_str} gender={gender_str}"
+        )
+        processed += 1
+    return {"processed": processed}
+
+
+async def process_animal_alert(payload: AnimalAlertPayload) -> dict:
+    """
+    Process animal alert events — log only, no DB storage.
+    """
+    processed = 0
+    for det in payload.detections:
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        logger.info(
+            f"[ANIMAL ALERT] {dt} | {det.class_name} (class_id={det.class_id}) | "
+            f"track_id={det.track_id} | confidence={det.confidence:.2f} | alert #{det.alert_count}"
+        )
+        processed += 1
+    return {"processed": processed}

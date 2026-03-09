@@ -39,6 +39,19 @@ async def init_db(db_path: str = "logic_service.db") -> aiosqlite.Connection:
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS stranger_alerts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id    TEXT    NOT NULL UNIQUE,
+            track_id    INTEGER NOT NULL,
+            person_id   TEXT    NOT NULL,
+            age         INTEGER,
+            gender      TEXT,
+            alert_count INTEGER NOT NULL DEFAULT 1,
+            timestamp   REAL    NOT NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     await _db.commit()
     return _db
 
