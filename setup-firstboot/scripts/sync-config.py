@@ -316,33 +316,33 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 restart_needed: list[str] = []
 new_cf = data.get("cloudflare_tunnel_token", "")
 
-if CONFIG_PREV.exists():
-    old_cf = read_json_key(CONFIG_PREV, "cloudflare_tunnel_token")
+# if CONFIG_PREV.exists():
+#     old_cf = read_json_key(CONFIG_PREV, "cloudflare_tunnel_token")
 
-    if old_cf != new_cf and new_cf:
-        log("Cloudflare token changed — updating tunnel")
-        cf_service = Path("/etc/systemd/system/cloudflared.service")
+#     if old_cf != new_cf and new_cf:
+#         log("Cloudflare token changed — updating tunnel")
+#         cf_service = Path("/etc/systemd/system/cloudflared.service")
 
-        if cf_service.exists():
-            content = cf_service.read_text()
-            content = re.sub(r"--token\s+\S+", f"--token {new_cf}", content)
-            cf_service.write_text(content)
-            run(["systemctl", "daemon-reload"])
-            run(["systemctl", "restart", "cloudflared"])
-            log("Cloudflared token updated via service file + restart")
-        else:
-            run(["cloudflared", "service", "install", new_cf])
-            run(["systemctl", "restart", "cloudflared"])
-            log("Cloudflared tunnel installed (first time)")
+#         if cf_service.exists():
+#             content = cf_service.read_text()
+#             content = re.sub(r"--token\s+\S+", f"--token {new_cf}", content)
+#             cf_service.write_text(content)
+#             run(["systemctl", "daemon-reload"])
+#             run(["systemctl", "restart", "cloudflared"])
+#             log("Cloudflared token updated via service file + restart")
+#         else:
+#             run(["cloudflared", "service", "install", new_cf])
+#             run(["systemctl", "restart", "cloudflared"])
+#             log("Cloudflared tunnel installed (first time)")
 
-        restart_needed.append("cloudflared")
-else:
-    # First run — setup cloudflare tunnel if token present
-    if new_cf:
-        log("First run — installing cloudflare tunnel")
-        run(["cloudflared", "service", "install", new_cf])
-        run(["systemctl", "restart", "cloudflared"])
-        restart_needed.append("cloudflared (first run)")
+#         restart_needed.append("cloudflared")
+# else:
+#     # First run — setup cloudflare tunnel if token present
+#     if new_cf:
+#         log("First run — installing cloudflare tunnel")
+#         run(["cloudflared", "service", "install", new_cf])
+#         run(["systemctl", "restart", "cloudflared"])
+#         restart_needed.append("cloudflared (first run)")
 
 if restart_needed:
     log(f"Services affected: {', '.join(restart_needed)}")
