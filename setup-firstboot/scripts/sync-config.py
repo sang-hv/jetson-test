@@ -26,8 +26,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -104,6 +103,7 @@ DB_PATH = DB_DIR / "logic_service.db"
 
 # ---------------------------------------------------------------------------
 # Call backend API (HMAC signature — key never sent)
+# Use curl to bypass Cloudflare TLS fingerprinting (urllib gets blocked)
 # ---------------------------------------------------------------------------
 log(f"Syncing from {BACKEND_URL} (device: {DEVICE_ID})")
 
@@ -115,40 +115,42 @@ signature = hmac.new(
     hashlib.sha256,
 ).hexdigest()
 
-req = Request(
-    api_url,
-    headers={
-        "X-Device-ID": DEVICE_ID,
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-        "Content-Type": "application/json",
-        "User-Agent": f"JetsonSync/1.0 (Device {DEVICE_ID})",
-    },
-)
-
 # Debug: log request details
 log(f"  URL:       GET {api_url}")
 log(f"  DEVICE_ID: {DEVICE_ID}")
 log(f"  TIMESTAMP: {timestamp}")
 log(f"  SECRET_KEY:{SECRET_KEY}")
 log(f"  SIGNATURE: {signature}")
-log(f"  Headers:")
-for hk, hv in req.headers.items():
-    log(f"    {hk}: {hv}")
 
-try:
-    with urlopen(req, timeout=30) as resp:
-        if resp.status != 200:
-            err(f"API returned HTTP {resp.status}")
-            sys.exit(1)
-        raw_body = resp.read()
-except HTTPError as exc:
-    body = exc.read().decode(errors='replace')
-    err(f"API returned HTTP {exc.code}")
-    err(f"Response body: {body}")
+result = subprocess.run(
+    [
+        "curl", "-s", "-w", "\n%{http_code}",
+        "-H", f"X-Device-ID: {DEVICE_ID}",
+        "-H", f"X-Timestamp: {timestamp}",
+        "-H", f"X-Signature: {signature}",
+        "-H", "Content-Type: application/json",
+        "--connect-timeout", "10",
+        "--max-time", "30",
+        api_url,
+    ],
+    capture_output=True,
+    text=True,
+)
+
+if result.returncode != 0:
+    err(f"curl failed: {result.stderr}")
     sys.exit(1)
-except (URLError, OSError) as exc:
-    err(f"API request failed: {exc}")
+
+# Split body and HTTP status code
+output_lines = result.stdout.rsplit("\n", 1)
+raw_body = output_lines[0] if len(output_lines) > 1 else result.stdout
+http_code = output_lines[1].strip() if len(output_lines) > 1 else "000"
+
+log(f"  HTTP: {http_code}")
+
+if http_code != "200":
+    err(f"API returned HTTP {http_code}")
+    err(f"Response body: {raw_body[:500]}")
     sys.exit(1)
 
 # Validate JSON
