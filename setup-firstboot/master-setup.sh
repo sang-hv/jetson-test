@@ -101,8 +101,8 @@ step "Step 3/12: Swap & Performance"
 
 # Swap (4GB)
 if [ ! -f /swapfile ]; then
-    log "Creating 4GB swap file..."
-    fallocate -l 4G /swapfile
+    log "Creating 8GB swap file..."
+    fallocate -l 8G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
@@ -342,8 +342,8 @@ mkdir -p "$SYSTEMD_USER_DIR"
 cp "$SCRIPT_DIR/services/audio-autostart.service" "$SYSTEMD_USER_DIR/audio-autostart.service"
 chown -R "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.config/systemd"
 
-# Enable user service
-su - "$ACTUAL_USER" -c "systemctl --user daemon-reload && systemctl --user enable audio-autostart.service" 2>&1 | tee -a "$LOG_FILE"
+# Enable user service (need D-Bus env vars for systemctl --user under sudo)
+su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user daemon-reload && systemctl --user enable audio-autostart.service" 2>&1 | tee -a "$LOG_FILE"
 
 # Enable lingering so user services start without login
 loginctl enable-linger "$ACTUAL_USER"
