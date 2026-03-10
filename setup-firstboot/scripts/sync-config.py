@@ -129,7 +129,7 @@ req = Request(
 log(f"  URL:       GET {api_url}")
 log(f"  DEVICE_ID: {DEVICE_ID}")
 log(f"  TIMESTAMP: {timestamp}")
-log(f"  SECRET_KEY:{SECRET_KEY[:6]}...{SECRET_KEY[-4:]}")
+log(f"  SECRET_KEY:{SECRET_KEY}")
 log(f"  SIGNATURE: {signature}")
 log(f"  Headers:")
 for hk, hv in req.headers.items():
@@ -142,7 +142,9 @@ try:
             sys.exit(1)
         raw_body = resp.read()
 except HTTPError as exc:
+    body = exc.read().decode(errors='replace')
     err(f"API returned HTTP {exc.code}")
+    err(f"Response body: {body}")
     sys.exit(1)
 except (URLError, OSError) as exc:
     err(f"API request failed: {exc}")
