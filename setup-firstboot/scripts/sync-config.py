@@ -122,6 +122,7 @@ req = Request(
         "X-Timestamp": timestamp,
         "X-Signature": signature,
         "Content-Type": "application/json",
+        "User-Agent": f"JetsonSync/1.0 (Device {DEVICE_ID})",
     },
 )
 
