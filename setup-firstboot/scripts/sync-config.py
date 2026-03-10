@@ -125,6 +125,16 @@ req = Request(
     },
 )
 
+# Debug: log request details
+log(f"  URL:       GET {api_url}")
+log(f"  DEVICE_ID: {DEVICE_ID}")
+log(f"  TIMESTAMP: {timestamp}")
+log(f"  SECRET_KEY:{SECRET_KEY[:6]}...{SECRET_KEY[-4:]}")
+log(f"  SIGNATURE: {signature}")
+log(f"  Headers:")
+for hk, hv in req.headers.items():
+    log(f"    {hk}: {hv}")
+
 try:
     with urlopen(req, timeout=30) as resp:
         if resp.status != 200:
