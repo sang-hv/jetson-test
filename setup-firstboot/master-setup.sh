@@ -251,13 +251,13 @@ chmod 600 /etc/device/device.env
 
 # Install sync script
 mkdir -p /opt/device
-cp "$SCRIPT_DIR/scripts/sync-config.sh" /opt/device/sync-config.sh
-chmod +x /opt/device/sync-config.sh
-log "Sync script → /opt/device/sync-config.sh"
+cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
+chmod +x /opt/device/sync-config.py
+log "Sync script → /opt/device/sync-config.py"
 
 # Setup cronjob (every 5 minutes)
-CRON_LINE="*/5 * * * * /opt/device/sync-config.sh >> /var/log/sync-config.log 2>&1"
-if crontab -l 2>/dev/null | grep -q "sync-config.sh"; then
+CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/sync-config.py >> /var/log/sync-config.log 2>&1"
+if crontab -l 2>/dev/null | grep -q "sync-config"; then
     log "Cronjob already exists"
 else
     (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
@@ -267,7 +267,7 @@ fi
 # Run first sync if device.env is configured
 if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     log "Running first config sync..."
-    /opt/device/sync-config.sh 2>&1 | tee -a "$LOG_FILE" || warn "First sync failed (will retry via cronjob)"
+    python3 /opt/device/sync-config.py 2>&1 | tee -a "$LOG_FILE" || warn "First sync failed (will retry via cronjob)"
 fi
 
 ###############################################################################
@@ -286,7 +286,7 @@ else
     log "Cloudflared installed: $(cloudflared --version 2>&1 | head -1)"
 fi
 
-# Tunnel token is managed by sync-config.sh (from API response)
+# Tunnel token is managed by sync-config.py (from API response)
 # If first sync succeeded, tunnel should already be configured
 if systemctl is-active cloudflared >/dev/null 2>&1; then
     log "Cloudflared tunnel already running"
@@ -399,7 +399,7 @@ echo ""
 echo "  ⚠️  Action required:"
 if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ]; then
 echo "    1. Edit /etc/device/device.env → set device identity"
-echo "    2. Run: /opt/device/sync-config.sh (first sync)"
+echo "    2. Run: python3 /opt/device/sync-config.py (first sync)"
 echo "    3. Reboot: sudo reboot"
 else
 echo "    1. Reboot: sudo reboot"
