@@ -206,11 +206,12 @@ cp "$SCRIPT_DIR/scripts/start-stream.sh" /opt/stream/start-stream.sh
 chmod +x /opt/stream/start-stream.sh
 log "Stream script → /opt/stream/start-stream.sh"
 
-# Systemd service
-cp "$SCRIPT_DIR/services/go2rtc.service" /etc/systemd/system/go2rtc.service
+# Systemd service — fix User to actual user
+sed "s/User=jetson/User=$ACTUAL_USER/" "$SCRIPT_DIR/services/go2rtc.service" \
+    > /etc/systemd/system/go2rtc.service
 systemctl daemon-reload
 systemctl enable go2rtc.service
-log "go2rtc service enabled"
+log "go2rtc service enabled (User=$ACTUAL_USER)"
 
 ###############################################################################
 # STEP 8: Device Identity + Sync Config
