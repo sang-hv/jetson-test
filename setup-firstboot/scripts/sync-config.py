@@ -3,11 +3,12 @@
 #  sync-config.py - Sync device configuration from backend API
 #
 #  Runs as cronjob every 5 minutes. Syncs:
-#    - Tokens & credentials → /etc/device/config.json
-#    - Face embeddings      → /data/mini-pc/faces/embeddings.json
-#    - Camera info          → /data/mini-pc/camera/infor_camera.json
+#    - Cloudflare tunnel token  → systemd service restart
+#    - Face embeddings          → SQLite face_embeddings table
+#    - Camera settings          → SQLite camera_settings table
+#    - AI rules                 → SQLite ai_rules table
 #
-#  Also triggers service restarts when critical config changes.
+#  API: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config
 #
 #  Usage:
 #    sudo python3 /opt/device/sync-config.py
@@ -17,7 +18,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -95,19 +98,16 @@ DATA_DIR = (
     if Path("/data/mini-pc").is_dir()
     else Path.home() / "data"
 )
-
-FACES_DIR = DATA_DIR / "faces"
-CAMERA_DIR = DATA_DIR / "camera"
-
-FACES_DIR.mkdir(parents=True, exist_ok=True)
-CAMERA_DIR.mkdir(parents=True, exist_ok=True)
+DB_DIR = DATA_DIR / "db"
+DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DB_DIR / "logic_service.db"
 
 # ---------------------------------------------------------------------------
 # Call backend API (HMAC signature — key never sent)
 # ---------------------------------------------------------------------------
 log(f"Syncing from {BACKEND_URL} (device: {DEVICE_ID})")
 
-api_url = f"{BACKEND_URL}/api/v1/devices/{DEVICE_ID}/config"
+api_url = f"{BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config"
 timestamp = str(int(time.time()))
 signature = hmac.new(
     SECRET_KEY.encode(),
@@ -140,52 +140,148 @@ except (URLError, OSError) as exc:
 
 # Validate JSON
 try:
-    data: dict = json.loads(raw_body)
+    response: dict = json.loads(raw_body)
 except json.JSONDecodeError:
     err("Invalid JSON response")
     sys.exit(1)
 
+if not response.get("success"):
+    err(f"API returned success=false: {response.get('message', '')}")
+    sys.exit(1)
+
+data: dict = response.get("data", {})
 log("API response OK")
 
 # ---------------------------------------------------------------------------
-# Save previous config for diff
+# Save previous config for diff (cloudflare token change detection)
 # ---------------------------------------------------------------------------
 if CONFIG_FILE.exists():
     shutil.copy2(CONFIG_FILE, CONFIG_PREV)
 
-# ---------------------------------------------------------------------------
-# Extract and save data
-# ---------------------------------------------------------------------------
-
-# 1. Config (tokens & credentials)
+# Save minimal config for change detection
 config_data = {
-    "token_cloudflare": data.get("token_cloudflare", ""),
-    "domain_tunnel": data.get("domain_tunnel", ""),
-    "token_stream": data.get("token_stream", ""),
-    "time_expire_stream_minute": data.get("time_expire_stream_minute", 30),
-    "s3_credential": data.get("s3_credential", {}),
-    "sqs_credential": data.get("sqs_credential", {}),
+    "cloudflare_tunnel_token": data.get("cloudflare_tunnel_token", ""),
     "_last_synced": datetime.now().isoformat(),
 }
 CONFIG_FILE.write_text(json.dumps(config_data, indent=2))
 log(f"Config saved → {CONFIG_FILE}")
 
-# 2. Face embeddings
-face_data = data.get("face_embed", {})
-if face_data:
-    face_file = FACES_DIR / "embeddings.json"
-    face_file.write_text(json.dumps(face_data, indent=2))
-    log(f"Face embeddings saved → {face_file}")
+# ---------------------------------------------------------------------------
+# SQLite — create tables + save data
+# ---------------------------------------------------------------------------
+db = sqlite3.connect(str(DB_PATH))
+db.execute("PRAGMA journal_mode=WAL;")
 
-# 3. Camera info
-camera_data = data.get("infor_camera", {})
-if camera_data:
-    camera_file = CAMERA_DIR / "infor_camera.json"
-    camera_file.write_text(json.dumps(camera_data, indent=2))
-    log(f"Camera info saved → {camera_file}")
+# --- Create tables ---
+db.execute("""
+    CREATE TABLE IF NOT EXISTS face_embeddings (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id   TEXT NOT NULL,
+        vector    TEXT NOT NULL
+    )
+""")
+
+db.execute("""
+    CREATE TABLE IF NOT EXISTS camera_settings (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        key   TEXT NOT NULL UNIQUE,
+        value TEXT NOT NULL
+    )
+""")
+
+db.execute("""
+    CREATE TABLE IF NOT EXISTS ai_rules (
+        id              TEXT PRIMARY KEY,
+        camera_id       TEXT,
+        user_id         TEXT,
+        rules_master_id TEXT,
+        facility_id     TEXT,
+        name            TEXT,
+        code            TEXT,
+        member_ids      TEXT,
+        start_time      TEXT,
+        end_time        TEXT,
+        weekdays        TEXT,
+        is_active       INTEGER DEFAULT 0,
+        created_at      TEXT,
+        updated_at      TEXT
+    )
+""")
+
+db.commit()
+
+# --- 1. Face embeddings (full replace) ---
+face_data: dict = data.get("face_embeddings", {})
+if face_data:
+    db.execute("DELETE FROM face_embeddings")
+    count = 0
+    for user_id, vectors in face_data.items():
+        for vector in vectors:
+            db.execute(
+                "INSERT INTO face_embeddings (user_id, vector) VALUES (?, ?)",
+                (user_id, json.dumps(vector)),
+            )
+            count += 1
+    db.commit()
+    log(f"Face embeddings saved → {count} vectors for {len(face_data)} users")
+
+# --- 2. Camera settings (upsert) ---
+settings_map = {
+    "stream_secret_key": data.get("stream_secret_key", ""),
+    "stream_view_duration_minutes": str(data.get("stream_view_duration_minutes", "")),
+}
+# Also extract from information block
+info: dict = data.get("information", {})
+if info:
+    if info.get("bluetooth_password"):
+        settings_map["bluetooth_password"] = info["bluetooth_password"]
+
+for key, value in settings_map.items():
+    if value:
+        db.execute(
+            "INSERT OR REPLACE INTO camera_settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+db.commit()
+log(f"Camera settings saved → {len(settings_map)} keys")
+
+# --- 3. AI rules (full replace) ---
+rules: list = data.get("rules", [])
+if rules:
+    db.execute("DELETE FROM ai_rules")
+    for rule in rules:
+        member_ids = rule.get("member_ids")
+        weekdays = rule.get("weekdays")
+        db.execute(
+            """INSERT INTO ai_rules
+               (id, camera_id, user_id, rules_master_id, facility_id,
+                name, code, member_ids, start_time, end_time, weekdays,
+                is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                rule.get("id"),
+                rule.get("camera_id"),
+                rule.get("user_id"),
+                rule.get("rules_master_id"),
+                rule.get("facility_id"),
+                rule.get("name"),
+                rule.get("code"),
+                json.dumps(member_ids) if member_ids is not None else None,
+                rule.get("start_time"),
+                rule.get("end_time"),
+                json.dumps(weekdays) if weekdays is not None else None,
+                1 if rule.get("is_active") else 0,
+                rule.get("created_at"),
+                rule.get("updated_at"),
+            ),
+        )
+    db.commit()
+    log(f"AI rules saved → {len(rules)} rules")
+
+db.close()
 
 # ---------------------------------------------------------------------------
-# Detect changes & restart services if needed
+# Detect cloudflare token changes & restart service
 # ---------------------------------------------------------------------------
 
 
@@ -203,44 +299,30 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 restart_needed: list[str] = []
+new_cf = data.get("cloudflare_tunnel_token", "")
 
 if CONFIG_PREV.exists():
-    # --- Cloudflare token change ---
-    old_cf = read_json_key(CONFIG_PREV, "token_cloudflare")
-    new_cf = read_json_key(CONFIG_FILE, "token_cloudflare")
+    old_cf = read_json_key(CONFIG_PREV, "cloudflare_tunnel_token")
 
     if old_cf != new_cf and new_cf:
         log("Cloudflare token changed — updating tunnel")
         cf_service = Path("/etc/systemd/system/cloudflared.service")
 
         if cf_service.exists():
-            # Update token in existing service file
             content = cf_service.read_text()
-            import re
             content = re.sub(r"--token\s+\S+", f"--token {new_cf}", content)
             cf_service.write_text(content)
             run(["systemctl", "daemon-reload"])
             run(["systemctl", "restart", "cloudflared"])
             log("Cloudflared token updated via service file + restart")
         else:
-            # First install
             run(["cloudflared", "service", "install", new_cf])
             run(["systemctl", "restart", "cloudflared"])
             log("Cloudflared tunnel installed (first time)")
 
         restart_needed.append("cloudflared")
-
-    # --- Stream token change ---
-    old_st = read_json_key(CONFIG_PREV, "token_stream")
-    new_st = read_json_key(CONFIG_FILE, "token_stream")
-
-    if old_st != new_st:
-        log("Stream token changed")
-        restart_needed.append("stream_token")
-
 else:
     # First run — setup cloudflare tunnel if token present
-    new_cf = read_json_key(CONFIG_FILE, "token_cloudflare")
     if new_cf:
         log("First run — installing cloudflare tunnel")
         run(["cloudflared", "service", "install", new_cf])
@@ -250,6 +332,6 @@ else:
 if restart_needed:
     log(f"Services affected: {', '.join(restart_needed)}")
 else:
-    log("No changes detected — all services up to date")
+    log("No config changes detected — all services up to date")
 
 log("Sync complete")

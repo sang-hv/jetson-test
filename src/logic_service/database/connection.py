@@ -52,6 +52,41 @@ async def init_db(db_path: str = "logic_service.db") -> aiosqlite.Connection:
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # --- Tables populated by sync-config.py (cronjob) ---
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS face_embeddings (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id   TEXT NOT NULL,
+            vector    TEXT NOT NULL
+        )
+    """)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS camera_settings (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            key   TEXT NOT NULL UNIQUE,
+            value TEXT NOT NULL
+        )
+    """)
+    await _db.execute("""
+        CREATE TABLE IF NOT EXISTS ai_rules (
+            id              TEXT PRIMARY KEY,
+            camera_id       TEXT,
+            user_id         TEXT,
+            rules_master_id TEXT,
+            facility_id     TEXT,
+            name            TEXT,
+            code            TEXT,
+            member_ids      TEXT,
+            start_time      TEXT,
+            end_time        TEXT,
+            weekdays        TEXT,
+            is_active       INTEGER DEFAULT 0,
+            created_at      TEXT,
+            updated_at      TEXT
+        )
+    """)
+
     await _db.commit()
     return _db
 
