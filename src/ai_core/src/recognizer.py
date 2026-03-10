@@ -121,10 +121,11 @@ class FaceRecognizer:
         self.known_labels: List[str] = []
 
     def _cuda_available(self) -> bool:
-        """Check if CUDA is actually available."""
+        """Check if CUDA is actually available (including TensorRT on Jetson)."""
         if ort is None:
             return False
-        return "CUDAExecutionProvider" in ort.get_available_providers()
+        available = ort.get_available_providers()
+        return "CUDAExecutionProvider" in available or "TensorrtExecutionProvider" in available
 
     def _get_providers(self, device: str) -> List[str]:
         """
@@ -139,8 +140,14 @@ class FaceRecognizer:
         available = ort.get_available_providers()
 
         if device == "cuda":
+            providers = []
+            if "TensorrtExecutionProvider" in available:
+                providers.append("TensorrtExecutionProvider")
             if "CUDAExecutionProvider" in available:
-                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                providers.append("CUDAExecutionProvider")
+            if providers:
+                providers.append("CPUExecutionProvider")
+                return providers
             else:
                 print("[Recognizer] WARNING: CUDA requested but not available, using CPU")
                 return ["CPUExecutionProvider"]
