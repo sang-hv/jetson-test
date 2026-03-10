@@ -207,7 +207,7 @@ chmod +x /opt/stream/start-stream.sh
 log "Stream script → /opt/stream/start-stream.sh"
 
 # Systemd service — fix User to actual user
-sed "s/User=jetson/User=$ACTUAL_USER/" "$SCRIPT_DIR/services/go2rtc.service" \
+sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/go2rtc.service" \
     > /etc/systemd/system/go2rtc.service
 systemctl daemon-reload
 systemctl enable go2rtc.service
@@ -310,7 +310,7 @@ chmod +x /opt/backchannel/start.sh
 pip3 install websockets 2>&1 | tail -2 | tee -a "$LOG_FILE"
 
 # Systemd service — fix User to actual user
-sed "s/User=jetson/User=$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
+sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
     > /etc/systemd/system/backchannel.service
 systemctl daemon-reload
 systemctl enable backchannel.service

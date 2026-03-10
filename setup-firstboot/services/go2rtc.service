@@ -5,7 +5,7 @@ Wants=audio-autostart.service
 
 [Service]
 Type=simple
-User=jetson
+User=__USER__
 Group=audio
 ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
 Restart=always

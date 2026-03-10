@@ -4,7 +4,7 @@ After=network.target sound.target pulseaudio.service
 
 [Service]
 Type=simple
-User=jetson
+User=__USER__
 Group=audio
 WorkingDirectory=/opt/backchannel
 ExecStart=/bin/bash /opt/backchannel/start.sh
