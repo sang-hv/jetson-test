@@ -680,11 +680,13 @@ class Pipeline:
                 ret, frame = cap.read()
 
                 if not ret:
-                    # End of video file or camera error
-                    if self.config.source.isdigit():
-                        # Camera - might be temporary, retry
+                    # ZMQ source: False = timeout/reconnecting, keep waiting
+                    if self.config.video_source_type == "zmq":
                         continue
-                    # Video file - end of file
+                    # Camera index: might be temporary, retry
+                    if self.config.source.isdigit():
+                        continue
+                    # Video file: end of file
                     print("[Pipeline] End of video")
                     break
 
