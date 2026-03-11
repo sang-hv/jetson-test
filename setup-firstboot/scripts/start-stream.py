@@ -34,9 +34,9 @@ STREAM_FPS = 30
 STREAM_BITRATE = 2000  # kbps — reduced to save RAM
 TCP_PORT = 8553
 
-AI_WIDTH = 640   # smaller = less memory, sufficient for detection
-AI_HEIGHT = 640
-AI_MAX_FPS = 3   # 3fps is enough for AI detection
+AI_WIDTH = 1920   # smaller = less memory, sufficient for detection
+AI_HEIGHT = 1080
+AI_MAX_FPS = 5   # 3fps is enough for AI detection
 
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
 JPEG_QUALITY = 85  # higher quality for photo capture
