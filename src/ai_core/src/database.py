@@ -1,14 +1,13 @@
 """
-Known faces database with folder-based organization and NPZ caching.
-
-Loads reference face images from a folder structure and maintains
-a cache of embeddings for fast startup on subsequent runs.
+Known faces database with folder-based organization and NPZ caching,
+plus SQLite-based loading for pre-computed embeddings.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
@@ -341,3 +340,96 @@ class FaceDatabase:
         if self.manifest_path.exists():
             self.manifest_path.unlink()
         print("[Database] Cache cleared")
+
+
+class FaceDatabaseSQLite:
+    """
+    Loads pre-computed face embeddings from a SQLite database.
+
+    Reads from the `face_embeddings` table:
+        id        INTEGER PRIMARY KEY AUTOINCREMENT
+        user_id   TEXT NOT NULL
+        vector    TEXT NOT NULL  -- JSON array "[0.1, 0.2, ...]"
+
+    One user_id can have multiple rows (multiple embeddings per person).
+
+    Example:
+        db = FaceDatabaseSQLite("logic_service/logic_service.db")
+        data = db.load()
+        recognizer.set_known_faces(data.embeddings, data.labels)
+    """
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def load(self, force_refresh: bool = False) -> KnownFacesData:
+        """
+        Load face embeddings from SQLite database.
+
+        Args:
+            force_refresh: Ignored (kept for interface compatibility with FaceDatabase)
+
+        Returns:
+            KnownFacesData with embeddings and labels
+        """
+        if not Path(self.db_path).exists():
+            print(f"[Database] SQLite DB not found: {self.db_path}")
+            print("[Database] Running in detection-only mode")
+            return self._empty()
+
+        print(f"[Database] Loading embeddings from SQLite: {self.db_path}")
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.execute("SELECT user_id, vector FROM face_embeddings")
+            rows = cursor.fetchall()
+            conn.close()
+        except sqlite3.Error as e:
+            print(f"[Database] SQLite error: {e}")
+            return self._empty()
+
+        if not rows:
+            print("[Database] No embeddings found in face_embeddings table")
+            print("[Database] Running in detection-only mode")
+            return self._empty()
+
+        embeddings: List[np.ndarray] = []
+        labels: List[str] = []
+
+        for user_id, vector_text in rows:
+            try:
+                vector = json.loads(vector_text)
+                embeddings.append(np.array(vector, dtype=np.float32))
+                labels.append(user_id)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"  [SKIP] Bad vector for {user_id}: {e}")
+
+        if not embeddings:
+            print("[Database] No valid embeddings parsed")
+            return self._empty()
+
+        # Stack and L2-normalize
+        embeddings_array = np.vstack(embeddings)
+        norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-10)
+        embeddings_array = embeddings_array / norms
+
+        data = KnownFacesData(
+            embeddings=embeddings_array,
+            labels=labels,
+            image_paths=[""] * len(labels),
+        )
+
+        print(
+            f"[Database] Loaded {data.count} embeddings "
+            f"({data.unique_persons} persons) from SQLite"
+        )
+        return data
+
+    @staticmethod
+    def _empty() -> KnownFacesData:
+        return KnownFacesData(
+            embeddings=np.zeros((0, 512), dtype=np.float32),
+            labels=[],
+            image_paths=[],
+        )

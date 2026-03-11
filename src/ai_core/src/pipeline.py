@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-from .database import FaceDatabase
+from .database import FaceDatabase, FaceDatabaseSQLite
 from .detector import PersonDetector, TrackedAnimal, TrackedPerson
 from .mask_detector import MaskDetector
 from .ppe_detector import ProtectiveEquipmentDetector
@@ -109,6 +109,10 @@ class Config:
     animal_alert_interval: float = 10.0
     animal_confidence_threshold: float = 0.4
 
+    # Face database source (loaded from .env)
+    face_db_source: str = "folder"  # "folder" or "sqlite"
+    face_db_path: str = "logic_service/logic_service.db"
+
     @classmethod
     def from_args(cls, args) -> Config:
         """
@@ -152,6 +156,10 @@ class Config:
         animal_alert_interval = float(env_vars.get("ANIMAL_ALERT_INTERVAL", "10"))
         animal_confidence_threshold = float(env_vars.get("ANIMAL_CONFIDENCE_THRESHOLD", "0.4"))
 
+        # Parse face database source from .env
+        face_db_source = env_vars.get("FACE_DB_SOURCE", "folder").lower()
+        face_db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
+
         config = cls(
             source=str(args.source),
             known_dir=args.known_dir,
@@ -187,6 +195,9 @@ class Config:
             animal_detection_enabled=animal_detection_enabled,
             animal_alert_interval=animal_alert_interval,
             animal_confidence_threshold=animal_confidence_threshold,
+            # Face database source from .env
+            face_db_source=face_db_source,
+            face_db_path=face_db_path,
         )
 
         # Optimize for CPU inference
@@ -345,7 +356,11 @@ class Pipeline:
 
         # Load known faces database
         print("-" * 60)
-        self.database = FaceDatabase(config.known_dir, self.recognizer)
+        if config.face_db_source == "sqlite":
+            print(f"[Pipeline] Using SQLite face database: {config.face_db_path}")
+            self.database = FaceDatabaseSQLite(config.face_db_path)
+        else:
+            self.database = FaceDatabase(config.known_dir, self.recognizer)
         self._load_known_faces()
 
         # Initialize recognition worker (background thread)
