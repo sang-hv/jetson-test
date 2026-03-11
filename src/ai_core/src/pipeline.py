@@ -113,6 +113,9 @@ class Config:
     face_db_source: str = "folder"  # "folder" or "sqlite"
     face_db_path: str = "logic_service/logic_service.db"
 
+    # Tracker type (loaded from .env): "bytetrack", "botsort", "botsort_reid"
+    tracker_type: str = "bytetrack"
+
     # Video source type (loaded from .env): "opencv" or "zmq"
     video_source_type: str = "opencv"
     zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
@@ -165,6 +168,9 @@ class Config:
         face_db_source = env_vars.get("FACE_DB_SOURCE", "folder").lower()
         face_db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
 
+        # Parse tracker type from .env
+        tracker_type = env_vars.get("TRACKER_TYPE", "bytetrack").lower()
+
         # Parse video source type from .env
         video_source_type = env_vars.get("VIDEO_SOURCE_TYPE", "opencv").lower()
         zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
@@ -208,6 +214,8 @@ class Config:
             # Face database source from .env
             face_db_source=face_db_source,
             face_db_path=face_db_path,
+            # Tracker type from .env
+            tracker_type=tracker_type,
             # Video source from .env
             video_source_type=video_source_type,
             zmq_video_endpoint=zmq_video_endpoint,
@@ -280,11 +288,21 @@ class Pipeline:
         print(f"Animal detection: {'Enabled' if config.animal_detection_enabled else 'Disabled'}")
         print("-" * 60)
 
-        # Initialize person detector (YOLO + ByteTrack)
+        # Map tracker type to config file
+        tracker_config_map = {
+            "bytetrack": "bytetrack.yaml",
+            "botsort": "botsort_no_reid.yaml",
+            "botsort_reid": "botsort_reid.yaml",
+        }
+        tracker_config = tracker_config_map.get(config.tracker_type, "bytetrack.yaml")
+        print(f"Tracker: {config.tracker_type} ({tracker_config})")
+
+        # Initialize person detector (YOLO + tracker)
         self.detector = PersonDetector(
             model_name=config.yolo_model,
             device=config.device,
             person_conf=config.person_conf,
+            tracker_config=tracker_config,
             animal_detection_enabled=config.animal_detection_enabled,
         )
 
