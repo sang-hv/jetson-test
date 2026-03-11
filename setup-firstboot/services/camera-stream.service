@@ -1,15 +1,19 @@
 [Unit]
 Description=Camera Stream Pipeline (CSI + AI + TCP)
-After=network.target sound.target pulseaudio.service
+After=network.target sound.target pulseaudio.service nvargus-daemon.service
 Wants=audio-autostart.service
 
 [Service]
 Type=simple
 User=__USER__
 Group=audio
+
+# Reset GPU/camera before start (frees leaked memory from previous runs)
+ExecStartPre=/bin/bash -c 'systemctl restart nvargus-daemon && sleep 2'
+
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
-RestartSec=3
+RestartSec=5
 WatchdogSec=60
 
 # Logging
