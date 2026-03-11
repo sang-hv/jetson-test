@@ -15,6 +15,8 @@ class CrossingDetection(BaseModel):
     direction: Literal["in", "out"] = Field(..., description="Direction of crossing")
     age: Optional[int] = Field(None, description="Confirmed age, NULL if uncertain")
     gender: Optional[str] = Field(None, description='"M", "F", or NULL if uncertain')
+    confidence: Optional[float] = Field(None, description="Recognition confidence 0.0-1.0")
+    detection_result: Optional[str] = Field(None, description="Recognition result")
 
 
 class CrossingEventPayload(BaseModel):
@@ -35,6 +37,8 @@ class StrangerAlertDetection(BaseModel):
     age: Optional[int] = Field(None, description="Confirmed age, NULL if uncertain")
     gender: Optional[str] = Field(None, description='"M", "F", or NULL if uncertain')
     alert_count: int = Field(1, description="Number of alerts sent for this track so far")
+    confidence: Optional[float] = Field(None, description="Recognition confidence 0.0-1.0")
+    detection_result: Optional[str] = Field(None, description="Recognition result")
 
 
 class StrangerAlertPayload(BaseModel):
@@ -51,14 +55,15 @@ class PasserbyDetection(BaseModel):
     person_id: str = Field("Unknown", description="Always 'Unknown' or 'Name?' (uncertain)")
     age: Optional[int] = Field(None, description="Confirmed age, NULL if uncertain")
     gender: Optional[str] = Field(None, description='"M", "F", or NULL if uncertain')
-
+    confidence: Optional[float] = Field(None, description="Recognition confidence 0.0-1.0")
+    detection_result: Optional[str] = Field(None, description="Recognition result")
+    
 
 class PasserbyEventPayload(BaseModel):
     """Payload for passerby events published over ZMQ."""
 
     timestamp: float = Field(..., description="Unix timestamp (seconds)")
     detections: List[PasserbyDetection] = Field(..., description="One entry per passerby")
-
 
 class AnimalAlertDetection(BaseModel):
     """A single animal detection alert."""
@@ -68,7 +73,7 @@ class AnimalAlertDetection(BaseModel):
     class_name: str = Field(..., description="Animal class name (e.g., 'dog', 'cat')")
     confidence: float = Field(..., description="Detection confidence 0.0-1.0")
     alert_count: int = Field(1, description="Number of alerts sent for this track so far")
-
+    detection_result: Optional[str] = Field(None, description="Recognition result")
 
 class AnimalAlertPayload(BaseModel):
     """Payload for animal alert events published over ZMQ."""

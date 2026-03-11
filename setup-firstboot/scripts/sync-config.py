@@ -251,6 +251,9 @@ if info:
     if info.get("bluetooth_password"):
         settings_map["bluetooth_password"] = info["bluetooth_password"]
 
+    if info.get("facility"):
+        settings_map["facility"] = info["facility"]
+
 for key, value in settings_map.items():
     if value:
         db.execute(
