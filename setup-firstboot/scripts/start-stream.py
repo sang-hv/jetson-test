@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 ###############################################################################
-#  start-stream.py - GStreamer Tee Pipeline (24/7 service)
+#  start-stream.py - GStreamer Tee Pipeline
 #
-#  Runs as systemd service, shares 1 CSI camera (IMX219) between:
-#    - Branch 1: H.264+AAC → MPEG-TS → TCP :8554 (go2rtc reads this)
+#  Shares 1 CSI camera (IMX219) between:
+#    - Branch 1: H.264+AAC → MPEG-TS → stdout (go2rtc exec)
 #    - Branch 2: AI JPEG frames → ZMQ ipc:///tmp/ai_frames.sock
 #
-#  go2rtc.yaml: tcp://localhost:8554
-#  AI consumer: zmq.SUB → ipc:///tmp/ai_frames.sock
+#  Modes:
+#    exec    (default): fdsink fd=1 → go2rtc reads stdout
+#    service          : tcpserversink :8553 → nc reads TCP
+#
+#  go2rtc.yaml: exec:python3 /opt/stream/start-stream.py
 ###############################################################################
 
+import argparse
 import os
 import signal
 import sys
@@ -161,7 +165,7 @@ def has_echocancel() -> bool:
 # ---------------------------------------------------------------------------
 # Build pipeline
 # ---------------------------------------------------------------------------
-def build_pipeline(with_audio: bool) -> Gst.Pipeline:
+def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     """Build GStreamer pipeline with tee for stream + AI."""
 
     # Video source (shared)
@@ -193,12 +197,15 @@ def build_pipeline(with_audio: bool) -> Gst.Pipeline:
     else:
         audio_branch = ""
 
-    # Muxer → TCP server (go2rtc reads from tcp://localhost:8554)
-    mux_out = (
-        f"mpegtsmux name=mux alignment=7 ! "
-        f"tcpserversink host=0.0.0.0 port={TCP_PORT} "
-        f"recover-policy=keyframe sync-method=latest-keyframe"
-    )
+    # Muxer → output (exec mode: stdout, service mode: TCP)
+    if mode == "service":
+        mux_out = (
+            f"mpegtsmux name=mux alignment=7 ! "
+            f"tcpserversink host=0.0.0.0 port={TCP_PORT} "
+            f"recover-policy=keyframe sync-method=latest-keyframe"
+        )
+    else:
+        mux_out = "mpegtsmux name=mux alignment=7 ! fdsink fd=1"
 
     # Branch 2: AI → appsink (JPEG for ZMQ)
     ai_branch = (
@@ -228,7 +235,13 @@ def build_pipeline(with_audio: bool) -> Gst.Pipeline:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["exec", "service"], default="exec",
+                        help="exec: fdsink stdout (go2rtc), service: tcpserversink TCP")
+    args = parser.parse_args()
+
     Gst.init(None)
+    log(f"Mode: {args.mode}")
 
     # PulseAudio env — force-set using actual UID (%U in systemd resolves wrong)
     uid = os.getuid()
@@ -250,7 +263,7 @@ def main() -> int:
         log("AI frames: disabled (stream only mode)")
 
     # Build and start pipeline
-    pipeline = build_pipeline(with_audio)
+    pipeline = build_pipeline(with_audio, mode=args.mode)
     pipeline.set_state(Gst.State.PLAYING)
     log("Pipeline PLAYING")
 

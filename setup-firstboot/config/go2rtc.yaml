@@ -1,7 +1,7 @@
 streams:
-  # camera-stream.service serves MPEG-TS (H.264+AAC) on TCP :8553
+  # Tee pipeline: stream (stdout→go2rtc) + AI (ZMQ)
   camera:
-    - exec:nc localhost 8553
+    - exec:python3 /opt/stream/start-stream.py
 
 api:
   listen: ":1984"
