@@ -28,7 +28,7 @@ STREAM_WIDTH = 1920
 STREAM_HEIGHT = 1080
 STREAM_FPS = 30
 STREAM_BITRATE = 4000  # kbps (higher for 1080p)
-TCP_PORT = 8554  # MPEG-TS TCP server port for go2rtc
+TCP_PORT = 8553  # MPEG-TS TCP server port (8554 is used by go2rtc RTSP)
 
 AI_WIDTH = 1920  # same as stream — needed for photo capture
 AI_HEIGHT = 1080
@@ -127,19 +127,27 @@ def on_new_sample(sink) -> Gst.FlowReturn:
 # PulseAudio check
 # ---------------------------------------------------------------------------
 def has_echocancel() -> bool:
-    """Check if PulseAudio echocancel_source is available."""
+    """Check if PulseAudio echocancel_source is available, with retries."""
     import subprocess
 
-    try:
-        result = subprocess.run(
-            ["pactl", "list", "short", "sources"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return "echocancel_source" in result.stdout
-    except Exception:
-        return False
+    for attempt in range(10):
+        try:
+            result = subprocess.run(
+                ["pactl", "list", "short", "sources"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if "echocancel_source" in result.stdout:
+                return True
+            if attempt < 9:
+                log(f"  PulseAudio: echocancel not found, retry {attempt + 1}/10...")
+                time.sleep(2)
+        except Exception as e:
+            if attempt < 9:
+                log(f"  PulseAudio: not ready ({e}), retry {attempt + 1}/10...")
+                time.sleep(2)
+    return False
 
 
 # ---------------------------------------------------------------------------
