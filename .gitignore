@@ -3,3 +3,4 @@ data/
 *.pyc
 *.pyo
 *.db*
+src/logic_service/.env

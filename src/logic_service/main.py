@@ -15,6 +15,15 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the same directory as this file
+_env_path = Path(__file__).resolve().parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
+
 from contextlib import asynccontextmanager
 
 import zmq
@@ -76,10 +85,10 @@ async def _zmq_subscriber_loop() -> None:
                     result = await process_stranger_alert(payload, db)
                 elif topic == ZMQ_PASSERBY_TOPIC:
                     payload = PasserbyEventPayload.model_validate_json(raw)
-                    result = await process_passerby_event(payload)
+                    result = await process_passerby_event(payload, db)
                 elif topic == ZMQ_ANIMAL_TOPIC:
                     payload = AnimalAlertPayload.model_validate_json(raw)
-                    result = await process_animal_alert(payload)
+                    result = await process_animal_alert(payload, db)
                 else:
                     logger.warning(f"Unknown ZMQ topic: {topic}")
                     continue

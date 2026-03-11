@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 ###############################################################################
-#  start-stream.py - GStreamer Tee Pipeline (24/7 service)
+#  start-stream.py - GStreamer Tee Pipeline
 #
-#  Runs as systemd service, shares 1 CSI camera (IMX219) between:
-#    - Branch 1: H.264+AAC → MPEG-TS → TCP :8554 (go2rtc reads this)
+#  Shares 1 CSI camera (IMX219) between:
+#    - Branch 1: H.264+AAC → MPEG-TS → stdout (go2rtc exec)
 #    - Branch 2: AI JPEG frames → ZMQ ipc:///tmp/ai_frames.sock
 #
-#  go2rtc.yaml: tcp://localhost:8554
-#  AI consumer: zmq.SUB → ipc:///tmp/ai_frames.sock
+#  Modes:
+#    exec    (default): fdsink fd=1 → go2rtc reads stdout
+#    service          : tcpserversink :8553 → nc reads TCP
+#
+#  go2rtc.yaml: exec:python3 /opt/stream/start-stream.py
 ###############################################################################
 
+import argparse
 import os
 import signal
 import sys
@@ -27,12 +31,12 @@ from gi.repository import GLib, Gst
 STREAM_WIDTH = 1920
 STREAM_HEIGHT = 1080
 STREAM_FPS = 30
-STREAM_BITRATE = 4000  # kbps (higher for 1080p)
-TCP_PORT = 8553  # MPEG-TS TCP server port (8554 is used by go2rtc RTSP)
+STREAM_BITRATE = 2000  # kbps — reduced to save RAM
+TCP_PORT = 8553
 
-AI_WIDTH = 1920  # same as stream — needed for photo capture
-AI_HEIGHT = 1080
-AI_MAX_FPS = 5  # limit AI frame rate
+AI_WIDTH = 640   # smaller = less memory, sufficient for detection
+AI_HEIGHT = 640
+AI_MAX_FPS = 3   # 3fps is enough for AI detection
 
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
 JPEG_QUALITY = 85  # higher quality for photo capture
@@ -93,18 +97,11 @@ def publish_frame(jpeg_data: bytes, timestamp_ns: int) -> None:
 # GStreamer appsink callback
 # ---------------------------------------------------------------------------
 _last_ai_frame_time = 0.0
-_ai_interval = 1.0 / AI_MAX_FPS
 
 
 def on_new_sample(sink) -> Gst.FlowReturn:
-    """Called when appsink has a new JPEG frame for AI."""
+    """Called when appsink has a new JPEG frame for AI (already rate-limited by videorate)."""
     global _last_ai_frame_time
-
-    # Frame rate limiter
-    now = time.monotonic()
-    if now - _last_ai_frame_time < _ai_interval:
-        return Gst.FlowReturn.OK
-    _last_ai_frame_time = now
 
     sample = sink.emit("pull-sample")
     if sample is None:
@@ -161,7 +158,7 @@ def has_echocancel() -> bool:
 # ---------------------------------------------------------------------------
 # Build pipeline
 # ---------------------------------------------------------------------------
-def build_pipeline(with_audio: bool) -> Gst.Pipeline:
+def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     """Build GStreamer pipeline with tee for stream + AI."""
 
     # Video source (shared)
@@ -193,17 +190,22 @@ def build_pipeline(with_audio: bool) -> Gst.Pipeline:
     else:
         audio_branch = ""
 
-    # Muxer → TCP server (go2rtc reads from tcp://localhost:8554)
-    mux_out = (
-        f"mpegtsmux name=mux alignment=7 ! "
-        f"tcpserversink host=0.0.0.0 port={TCP_PORT} "
-        f"recover-policy=keyframe sync-method=latest-keyframe"
-    )
+    # Muxer → output (exec mode: stdout, service mode: TCP)
+    if mode == "service":
+        mux_out = (
+            f"mpegtsmux name=mux alignment=7 ! "
+            f"tcpserversink host=0.0.0.0 port={TCP_PORT} "
+            f"recover-policy=keyframe sync-method=latest-keyframe"
+        )
+    else:
+        mux_out = "mpegtsmux name=mux alignment=7 ! fdsink fd=1"
 
     # Branch 2: AI → appsink (JPEG for ZMQ)
+    # videorate limits to AI_MAX_FPS BEFORE heavy processing (saves GPU memory)
     ai_branch = (
         f"t. ! queue leaky=downstream max-size-buffers=2 "
         f"max-size-bytes=0 max-size-time=0 ! "
+        f"videorate ! video/x-raw,framerate={AI_MAX_FPS}/1 ! "
         f"videoscale ! video/x-raw,width={AI_WIDTH},height={AI_HEIGHT} ! "
         f"videoconvert ! video/x-raw,format=RGB ! "
         f"jpegenc quality={JPEG_QUALITY} ! "
@@ -228,7 +230,13 @@ def build_pipeline(with_audio: bool) -> Gst.Pipeline:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["exec", "service"], default="exec",
+                        help="exec: fdsink stdout (go2rtc), service: tcpserversink TCP")
+    args = parser.parse_args()
+
     Gst.init(None)
+    log(f"Mode: {args.mode}")
 
     # PulseAudio env — force-set using actual UID (%U in systemd resolves wrong)
     uid = os.getuid()
@@ -250,7 +258,7 @@ def main() -> int:
         log("AI frames: disabled (stream only mode)")
 
     # Build and start pipeline
-    pipeline = build_pipeline(with_audio)
+    pipeline = build_pipeline(with_audio, mode=args.mode)
     pipeline.set_state(Gst.State.PLAYING)
     log("Pipeline PLAYING")
 
