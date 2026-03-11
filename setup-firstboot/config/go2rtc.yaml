@@ -1,7 +1,7 @@
 streams:
-  # ===== USB CAMERA + MIC (auto-detect) =====
+  # camera-stream.service outputs MPEG-TS (H.264+AAC) on TCP :8554
   camera:
-    - exec:bash /opt/stream/start-stream.sh
+    - tcp://localhost:8554
 
 api:
   listen: ":1984"

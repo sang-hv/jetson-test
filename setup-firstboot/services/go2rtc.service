@@ -1,19 +1,14 @@
 [Unit]
 Description=go2rtc streaming server
-After=network.target sound.target pulseaudio.service
-Wants=audio-autostart.service
+After=network.target camera-stream.service
+Wants=camera-stream.service
 
 [Service]
 Type=simple
 User=__USER__
-Group=audio
 ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
 Restart=always
 RestartSec=5
-
-# PulseAudio access (needed for audio in GStreamer pipeline)
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
 
 # Logging
 StandardOutput=journal

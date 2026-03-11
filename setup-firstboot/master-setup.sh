@@ -200,18 +200,21 @@ mkdir -p /etc/go2rtc
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 log "go2rtc config → /etc/go2rtc/go2rtc.yaml"
 
-# Stream script
+# Stream scripts
 mkdir -p /opt/stream
+cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
 cp "$SCRIPT_DIR/scripts/start-stream.sh" /opt/stream/start-stream.sh
-chmod +x /opt/stream/start-stream.sh
-log "Stream script → /opt/stream/start-stream.sh"
+chmod +x /opt/stream/start-stream.py /opt/stream/start-stream.sh
+log "Stream scripts → /opt/stream/ (tee pipeline + fallback)"
 
-# Systemd service — fix User to actual user
+# Systemd services — fix User to actual user
+sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/camera-stream.service" \
+    > /etc/systemd/system/camera-stream.service
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/go2rtc.service" \
     > /etc/systemd/system/go2rtc.service
 systemctl daemon-reload
-systemctl enable go2rtc.service
-log "go2rtc service enabled (User=$ACTUAL_USER)"
+systemctl enable camera-stream.service go2rtc.service
+log "camera-stream + go2rtc services enabled (User=$ACTUAL_USER)"
 
 ###############################################################################
 # STEP 8: Device Identity + Sync Config
