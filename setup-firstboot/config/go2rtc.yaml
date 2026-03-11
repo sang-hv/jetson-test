@@ -1,7 +1,7 @@
 streams:
-  # camera-stream.service outputs MPEG-TS (H.264+AAC) on TCP :8554
+  # camera-stream.service serves MPEG-TS (H.264+AAC) on TCP :8554
   camera:
-    - tcp://localhost:8554
+    - exec:nc localhost 8554
 
 api:
   listen: ":1984"
