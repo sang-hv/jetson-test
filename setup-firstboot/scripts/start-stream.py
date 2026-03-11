@@ -97,18 +97,11 @@ def publish_frame(jpeg_data: bytes, timestamp_ns: int) -> None:
 # GStreamer appsink callback
 # ---------------------------------------------------------------------------
 _last_ai_frame_time = 0.0
-_ai_interval = 1.0 / AI_MAX_FPS
 
 
 def on_new_sample(sink) -> Gst.FlowReturn:
-    """Called when appsink has a new JPEG frame for AI."""
+    """Called when appsink has a new JPEG frame for AI (already rate-limited by videorate)."""
     global _last_ai_frame_time
-
-    # Frame rate limiter
-    now = time.monotonic()
-    if now - _last_ai_frame_time < _ai_interval:
-        return Gst.FlowReturn.OK
-    _last_ai_frame_time = now
 
     sample = sink.emit("pull-sample")
     if sample is None:
@@ -208,9 +201,11 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
         mux_out = "mpegtsmux name=mux alignment=7 ! fdsink fd=1"
 
     # Branch 2: AI → appsink (JPEG for ZMQ)
+    # videorate limits to AI_MAX_FPS BEFORE heavy processing (saves GPU memory)
     ai_branch = (
         f"t. ! queue leaky=downstream max-size-buffers=2 "
         f"max-size-bytes=0 max-size-time=0 ! "
+        f"videorate ! video/x-raw,framerate={AI_MAX_FPS}/1 ! "
         f"videoscale ! video/x-raw,width={AI_WIDTH},height={AI_HEIGHT} ! "
         f"videoconvert ! video/x-raw,format=RGB ! "
         f"jpegenc quality={JPEG_QUALITY} ! "

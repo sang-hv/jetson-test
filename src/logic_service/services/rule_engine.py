@@ -63,7 +63,7 @@ def _is_within_time_window(rule: dict, event_timestamp: float) -> bool:
     """
     # Check is_active
     if not rule.get("is_active", 0):
-        logger.debug(f"Rule {rule.get('code')} is not active — skipping SQS")
+        logger.info(f"[SQS SKIP] Rule {rule.get('code')} is_active=0 — skipping")
         return False
 
     # Parse event time in UTC+9 (JST — Japan Standard Time)
@@ -79,8 +79,8 @@ def _is_within_time_window(rule: dict, event_timestamp: float) -> bool:
             weekdays = json.loads(weekdays_raw) if isinstance(weekdays_raw, str) else weekdays_raw
             current_weekday = event_dt.isoweekday()  # 1=Mon, 7=Sun
             if current_weekday not in weekdays:
-                logger.debug(
-                    f"Rule {rule.get('code')}: weekday {current_weekday} not in {weekdays} — skipping SQS"
+                logger.info(
+                    f"[SQS SKIP] Rule {rule.get('code')}: weekday {current_weekday} not in {weekdays}"
                 )
                 return False
         except (json.JSONDecodeError, TypeError):
@@ -98,15 +98,15 @@ def _is_within_time_window(rule: dict, event_timestamp: float) -> bool:
             if start_t <= end_t:
                 # Normal window: e.g. 08:00 - 18:00
                 if not (start_t <= current_t <= end_t):
-                    logger.debug(
-                        f"Rule {rule.get('code')}: time {current_t} not in [{start_t}, {end_t}] — skipping SQS"
+                    logger.info(
+                        f"[SQS SKIP] Rule {rule.get('code')}: time {current_t} not in [{start_t}, {end_t}]"
                     )
                     return False
             else:
                 # Overnight window: e.g. 22:00 - 06:00
                 if not (current_t >= start_t or current_t <= end_t):
-                    logger.debug(
-                        f"Rule {rule.get('code')}: time {current_t} not in [{start_t}, {end_t}] (overnight) — skipping SQS"
+                    logger.info(
+                        f"[SQS SKIP] Rule {rule.get('code')}: time {current_t} not in [{start_t}, {end_t}] (overnight)"
                     )
                     return False
         except (ValueError, TypeError) as exc:
