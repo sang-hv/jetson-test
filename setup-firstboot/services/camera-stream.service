@@ -7,13 +7,9 @@ Wants=audio-autostart.service
 Type=simple
 User=__USER__
 Group=audio
-ExecStart=/usr/bin/python3 /opt/stream/start-stream.py
+ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
 RestartSec=5
-
-# PulseAudio access (needed for audio)
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
 
 # Logging
 StandardOutput=journal
