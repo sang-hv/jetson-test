@@ -167,7 +167,7 @@ class Config:
             device=args.device,
             min_confirm_frames=args.min_confirm_frames,
             recognize_interval_ms=float(args.recognize_interval_ms),
-            person_conf=args.person_conf,
+            person_conf=float(env_vars.get("PERSON_CONFIDENCE_THRESHOLD", str(args.person_conf))),
             cam_width=args.cam_width,
             cam_height=args.cam_height,
             cam_fps=args.cam_fps,

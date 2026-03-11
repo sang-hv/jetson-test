@@ -22,7 +22,7 @@ from schemas.event_models import AnimalAlertPayload, CrossingDetection, Crossing
 logger = logging.getLogger(__name__)
 
 # Module-level debounce cache — survives across requests in the same process
-_debounce_cache: TTLCache = TTLCache(maxsize=1000, ttl=300)  # 5 minutes
+_debounce_cache: TTLCache = TTLCache(maxsize=1000, ttl=30)  # 30s
 
 
 def _debounce_key(det: CrossingDetection) -> str:
