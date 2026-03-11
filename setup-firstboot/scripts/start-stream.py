@@ -130,6 +130,13 @@ def has_echocancel() -> bool:
     """Check if PulseAudio echocancel_source is available, with retries."""
     import subprocess
 
+    # Debug: show PulseAudio env
+    log(f"  PulseAudio debug:")
+    log(f"    UID: {os.getuid()}")
+    log(f"    XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '<not set>')}")
+    log(f"    PULSE_SERVER: {os.environ.get('PULSE_SERVER', '<not set>')}")
+    log(f"    HOME: {os.environ.get('HOME', '<not set>')}")
+
     for attempt in range(10):
         try:
             result = subprocess.run(
@@ -138,6 +145,7 @@ def has_echocancel() -> bool:
                 text=True,
                 timeout=5,
             )
+            log(f"    pactl exit={result.returncode} stdout='{result.stdout.strip()[:200]}' stderr='{result.stderr.strip()[:200]}'")
             if "echocancel_source" in result.stdout:
                 return True
             if attempt < 9:
