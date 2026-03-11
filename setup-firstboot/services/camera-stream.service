@@ -1,19 +1,21 @@
 [Unit]
 Description=Camera Stream Pipeline (CSI + AI + TCP)
-After=network.target sound.target pulseaudio.service
+After=network.target sound.target pulseaudio.service nvargus-daemon.service
 Wants=audio-autostart.service
 
 [Service]
 Type=simple
 User=__USER__
 Group=audio
-ExecStart=/usr/bin/python3 /opt/stream/start-stream.py
+
+# Reset GPU/camera before start (frees leaked memory from previous runs)
+# ExecStartPre=+/bin/systemctl restart nvargus-daemon
+# ExecStartPre=/bin/sleep 2
+
+ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
 RestartSec=5
-
-# PulseAudio access (needed for audio)
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
+# WatchdogSec=60
 
 # Logging
 StandardOutput=journal

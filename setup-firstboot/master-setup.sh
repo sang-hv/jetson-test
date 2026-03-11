@@ -200,12 +200,11 @@ mkdir -p /etc/go2rtc
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 log "go2rtc config → /etc/go2rtc/go2rtc.yaml"
 
-# Stream scripts
+# Stream script (tee pipeline: stream stdout + AI ZMQ)
 mkdir -p /opt/stream
 cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
-cp "$SCRIPT_DIR/scripts/start-stream.sh" /opt/stream/start-stream.sh
-chmod +x /opt/stream/start-stream.py /opt/stream/start-stream.sh
-log "Stream scripts → /opt/stream/ (tee pipeline + fallback)"
+chmod +x /opt/stream/start-stream.py
+log "Stream script → /opt/stream/start-stream.py"
 
 # Systemd services — fix User to actual user
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/camera-stream.service" \

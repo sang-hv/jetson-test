@@ -1,7 +1,7 @@
 streams:
-  # camera-stream.service serves MPEG-TS (H.264+AAC) on TCP :8553
+  # camera-stream.service → tcpserversink :8553 → tcpclientsrc here
   camera:
-    - exec:nc localhost 8553
+    - exec:gst-launch-1.0 -q tcpclientsrc host=localhost port=8553 ! fdsink fd=1
 
 api:
   listen: ":1984"
