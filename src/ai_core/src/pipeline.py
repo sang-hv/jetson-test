@@ -113,6 +113,11 @@ class Config:
     face_db_source: str = "folder"  # "folder" or "sqlite"
     face_db_path: str = "logic_service/logic_service.db"
 
+    # Video source type (loaded from .env): "opencv" or "zmq"
+    video_source_type: str = "opencv"
+    zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
+    zmq_recv_timeout_ms: int = 2000
+
     @classmethod
     def from_args(cls, args) -> Config:
         """
@@ -160,6 +165,11 @@ class Config:
         face_db_source = env_vars.get("FACE_DB_SOURCE", "folder").lower()
         face_db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
 
+        # Parse video source type from .env
+        video_source_type = env_vars.get("VIDEO_SOURCE_TYPE", "opencv").lower()
+        zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
+        zmq_recv_timeout_ms = int(env_vars.get("ZMQ_RECV_TIMEOUT_MS", "2000"))
+
         config = cls(
             source=str(args.source),
             known_dir=args.known_dir,
@@ -198,6 +208,10 @@ class Config:
             # Face database source from .env
             face_db_source=face_db_source,
             face_db_path=face_db_path,
+            # Video source from .env
+            video_source_type=video_source_type,
+            zmq_video_endpoint=zmq_video_endpoint,
+            zmq_recv_timeout_ms=zmq_recv_timeout_ms,
         )
 
         # Optimize for CPU inference
@@ -253,7 +267,10 @@ class Pipeline:
         print("Face Recognition System - Initializing")
         print("=" * 60)
         print(f"Device: {config.device}")
-        print(f"Source: {config.source}")
+        if config.video_source_type == "zmq":
+            print(f"Source: ZMQ ({config.zmq_video_endpoint})")
+        else:
+            print(f"Source: {config.source}")
         print(f"Known faces: {config.known_dir}")
         print(f"Threshold: {config.threshold}")
         print(f"Mask detection: {'Enabled' if config.mask_detection_enabled else 'Disabled'}")
@@ -388,13 +405,24 @@ class Pipeline:
         else:
             print("[Pipeline] No known faces loaded - all persons will be 'Unknown'")
 
-    def _open_video_source(self) -> cv2.VideoCapture:
+    def _open_video_source(self):
         """
-        Open video source (camera index, file path, or URL).
+        Open video source based on config.video_source_type.
 
-        Returns:
-            OpenCV VideoCapture object
+        Returns cv2.VideoCapture (opencv mode) or ZMQVideoSource (zmq mode).
+        Both expose read(), isOpened(), release(), get().
         """
+        if self.config.video_source_type == "zmq":
+            from .zmq_video_source import ZMQVideoSource
+
+            endpoint = self.config.zmq_video_endpoint
+            timeout = self.config.zmq_recv_timeout_ms
+            print(f"[Pipeline] Opening ZMQ video source: {endpoint} (timeout={timeout}ms)")
+            return ZMQVideoSource(
+                endpoint=endpoint,
+                recv_timeout_ms=timeout,
+            )
+
         source = self.config.source
 
         # Try to parse as camera index
