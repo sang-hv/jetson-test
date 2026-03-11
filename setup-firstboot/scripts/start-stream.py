@@ -31,12 +31,12 @@ from gi.repository import GLib, Gst
 STREAM_WIDTH = 1920
 STREAM_HEIGHT = 1080
 STREAM_FPS = 30
-STREAM_BITRATE = 4000  # kbps (higher for 1080p)
-TCP_PORT = 8553  # MPEG-TS TCP server port (8554 is used by go2rtc RTSP)
+STREAM_BITRATE = 2000  # kbps — reduced to save RAM
+TCP_PORT = 8553
 
-AI_WIDTH = 1920  # same as stream — needed for photo capture
-AI_HEIGHT = 1080
-AI_MAX_FPS = 5  # limit AI frame rate
+AI_WIDTH = 640   # smaller = less memory, sufficient for detection
+AI_HEIGHT = 640
+AI_MAX_FPS = 3   # 3fps is enough for AI detection
 
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
 JPEG_QUALITY = 85  # higher quality for photo capture
