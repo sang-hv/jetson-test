@@ -230,12 +230,10 @@ def build_pipeline(with_audio: bool) -> Gst.Pipeline:
 def main() -> int:
     Gst.init(None)
 
-    # PulseAudio env
+    # PulseAudio env — force-set using actual UID (%U in systemd resolves wrong)
     uid = os.getuid()
-    os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-    os.environ.setdefault(
-        "PULSE_SERVER", f"unix:/run/user/{uid}/pulse/native"
-    )
+    os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    os.environ["PULSE_SERVER"] = f"unix:/run/user/{uid}/pulse/native"
 
     # Check audio
     with_audio = has_echocancel()
