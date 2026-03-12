@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
+import numpy as np
+
 from .detector import TrackedPerson
 
 
@@ -27,6 +29,7 @@ class CrossingEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
+    crop: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -36,6 +39,7 @@ class PasserbyEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
+    crop: Optional[np.ndarray] = None
 
 
 class ZoneCounter:
@@ -61,6 +65,7 @@ class ZoneCounter:
         self._track_last_zone: dict[int, str] = {}   # track_id -> "in"/"out"
         self._track_last_seen: dict[int, int] = {}   # track_id -> frame_number
         self._track_person_info: dict[int, dict] = {}  # track_id -> {person_id, age, gender}
+        self._track_last_crop: dict[int, np.ndarray] = {}  # track_id -> last known crop
 
         self._in_count = 0
         self._out_count = 0
@@ -109,6 +114,7 @@ class ZoneCounter:
         frame_shape: Tuple[int, ...],
         frame_number: int,
         track_infos: Optional[Dict[int, dict]] = None,
+        track_crops: Optional[Dict[int, np.ndarray]] = None,
     ) -> None:
         """
         Update zone tracking for current frame's tracked persons.
@@ -136,6 +142,9 @@ class ZoneCounter:
 
                 if track_infos and track_id in track_infos:
                     self._track_person_info[track_id] = track_infos[track_id]
+
+                if track_crops and track_id in track_crops:
+                    self._track_last_crop[track_id] = track_crops[track_id]
 
     def process_lost_tracks(
         self,
@@ -169,6 +178,8 @@ class ZoneCounter:
                 last_zone = self._track_last_zone.get(tid)
                 info = self._track_person_info.get(tid, {})
 
+                crop = self._track_last_crop.get(tid)
+
                 if first_zone and last_zone and first_zone != last_zone:
                     if first_zone == "out" and last_zone == "in":
                         direction = "in"
@@ -182,6 +193,7 @@ class ZoneCounter:
                         person_id=info.get("person_id", "Unknown"),
                         age=info.get("age"),
                         gender=info.get("gender"),
+                        crop=crop,
                     ))
                 elif first_zone == "out" and last_zone == "out":
                     pid = info.get("person_id", "Unknown")
@@ -192,6 +204,7 @@ class ZoneCounter:
                             person_id=pid,
                             age=info.get("age"),
                             gender=info.get("gender"),
+                            crop=crop,
                         ))
 
                 # Cleanup state for this track
@@ -199,6 +212,7 @@ class ZoneCounter:
                 self._track_last_zone.pop(tid, None)
                 self._track_last_seen.pop(tid, None)
                 self._track_person_info.pop(tid, None)
+                self._track_last_crop.pop(tid, None)
 
         return crossings, passerby_events
 
