@@ -121,6 +121,9 @@ class Config:
     zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
     zmq_recv_timeout_ms: int = 2000
 
+    # Detection image saving directory
+    detection_image_dir: str = "detection"
+
     @classmethod
     def from_args(cls, args) -> Config:
         """
@@ -176,6 +179,9 @@ class Config:
         zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
         zmq_recv_timeout_ms = int(env_vars.get("ZMQ_RECV_TIMEOUT_MS", "2000"))
 
+        # Parse detection image directory from .env
+        detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")
+
         config = cls(
             source=str(args.source),
             known_dir=args.known_dir,
@@ -220,6 +226,8 @@ class Config:
             video_source_type=video_source_type,
             zmq_video_endpoint=zmq_video_endpoint,
             zmq_recv_timeout_ms=zmq_recv_timeout_ms,
+            # Detection image saving
+            detection_image_dir=detection_image_dir,
         )
 
         # Optimize for CPU inference
@@ -387,6 +395,10 @@ class Pipeline:
             )
             print(f"Animal detection: Enabled (alert interval={config.animal_alert_interval}s)")
 
+        # Initialize detection image saver
+        from .detection_saver import DetectionImageSaver
+        self.detection_saver = DetectionImageSaver(base_dir=config.detection_image_dir)
+
         self._frame_count = 0
 
         # Load known faces database
@@ -512,6 +524,7 @@ class Pipeline:
         # 2b. Update zone counter and process lost tracks
         if self.counter is not None:
             track_infos = {}
+            track_crops = {}
             for person in tracked_persons:
                 tid = person.track_id
                 age, gender = self.track_manager.get_age_gender(tid)
@@ -520,7 +533,10 @@ class Pipeline:
                     "age": age,
                     "gender": gender,
                 }
-            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos)
+                crop = self._extract_person_crop(frame, person)
+                if crop is not None:
+                    track_crops[tid] = crop
+            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos, track_crops)
             crossings, passerby_events = self.counter.process_lost_tracks(
                 active_ids, self._frame_count, self.config.counting_cleanup_max_age
             )
@@ -542,7 +558,7 @@ class Pipeline:
                         stranger_in_zone[tid] = info
                 alerts = self.stranger_alert_manager.update(stranger_in_zone)
                 if alerts and self.zmq_publisher is not None:
-                    self._publish_stranger_alerts(alerts)
+                    self._publish_stranger_alerts(alerts, track_crops)
 
         # 3. Submit recognition tasks (non-blocking)
         for person in tracked_persons:
@@ -618,12 +634,18 @@ class Pipeline:
         import time as _time
         detections = []
         for event in crossings:
+            detection_result = None
+            if event.crop is not None:
+                detection_result = self.detection_saver.save_crop(
+                    event.crop, "crossing", event.track_id, event.person_id,
+                )
             detections.append({
                 "track_id": event.track_id,
                 "person_id": event.person_id,
                 "direction": event.direction,
                 "age": event.age,
                 "gender": event.gender,
+                "detection_result": detection_result,
             })
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_detection(payload)
@@ -633,11 +655,17 @@ class Pipeline:
         import time as _time
         detections = []
         for event in events:
+            detection_result = None
+            if event.crop is not None:
+                detection_result = self.detection_saver.save_crop(
+                    event.crop, "passerby", event.track_id, event.person_id,
+                )
             detections.append({
                 "track_id": event.track_id,
                 "person_id": event.person_id,
                 "age": event.age,
                 "gender": event.gender,
+                "detection_result": detection_result,
             })
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_passerby_event(payload)
@@ -657,17 +685,24 @@ class Pipeline:
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_animal_alert(payload)
 
-    def _publish_stranger_alerts(self, alerts) -> None:
+    def _publish_stranger_alerts(self, alerts, track_crops=None) -> None:
         """Build ZMQ payload from stranger alert events and publish."""
         import time as _time
         detections = []
         for alert in alerts:
+            detection_result = None
+            crop = track_crops.get(alert.track_id) if track_crops else None
+            if crop is not None:
+                detection_result = self.detection_saver.save_crop(
+                    crop, "stranger_alert", alert.track_id, alert.person_id,
+                )
             detections.append({
                 "track_id": alert.track_id,
                 "person_id": alert.person_id,
                 "age": alert.age,
                 "gender": alert.gender,
                 "alert_count": alert.alert_count,
+                "detection_result": detection_result,
             })
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_stranger_alert(payload)
