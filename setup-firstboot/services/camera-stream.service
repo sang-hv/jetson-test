@@ -9,17 +9,21 @@ User=__USER__
 Group=audio
 
 # Reset GPU/camera before start (frees leaked memory from previous runs)
+# Chạy khi restart sau OOM — nvargus-daemon tự restart khi camera-stream bị kill
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
 
 # Reset PulseAudio echo-cancel module before starting (prevents silent audio after crash)
-# Runs as the actual user so pactl can reach PulseAudio session
 ExecStartPre=/bin/bash -c 'U=$(id -u __USER__); export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; /opt/audio/setup-audio-autostart.sh'
 ExecStartPre=/bin/sleep 1
 
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
 RestartSec=5
+
+# OOM: prefer to kill camera-stream (score 500) before go2rtc (score -900)
+# When killed → Restart=always brings it back cleanly with nvargus reset above
+OOMScoreAdjust=500
 
 # Logging
 StandardOutput=journal
