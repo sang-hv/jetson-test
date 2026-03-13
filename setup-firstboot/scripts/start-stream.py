@@ -187,7 +187,7 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
             "pulsesrc device=echocancel_source buffer-time=100000 latency-time=50000 do-timestamp=true ! "
             # Use a real-time queue with 1-second buffer; leaky=downstream drops old audio, not new
             "queue leaky=downstream max-size-time=1000000000 max-size-buffers=0 max-size-bytes=0 ! "
-            "audioconvert ! audioresample ! volume volume=3.0 ! "
+            "audioconvert ! audioresample ! volume volume=8.0 ! "
             "voaacenc bitrate=128000 ! aacparse ! mux."
         )
     else:
