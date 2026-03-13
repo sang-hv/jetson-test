@@ -9,9 +9,9 @@ Type=simple
 User=__USER__
 Group=audio
 WorkingDirectory=/opt/backchannel
-ExecStart=/bin/bash /opt/backchannel/start.sh
 # Safety net: ensure echocancel_sink exists before starting (in case camera-stream's ExecStartPre failed)
 ExecStartPre=/bin/bash -c 'U=$(id -u __USER__); export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; /opt/audio/setup-audio-autostart.sh'
+ExecStart=/bin/bash /opt/backchannel/start.sh
 Restart=always
 RestartSec=5
 
