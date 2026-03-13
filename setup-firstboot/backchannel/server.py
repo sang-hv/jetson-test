@@ -181,15 +181,6 @@ class BackchannelServer:
     def start_pipeline(self, client: str, fmt: str) -> bool:
         """Start audio pipeline. PCMU→pacat direct, WebM→FFmpeg→pacat."""
         try:
-            # Fallback sink if echocancel_sink is missing
-            target_sink = self.sink
-            try:
-                res = subprocess.run(['pactl', 'list', 'short', 'sinks'], capture_output=True, text=True, timeout=2)
-                if target_sink not in res.stdout:
-                    log.warning(f"[{client}] Sink {target_sink} not found, falling back to default")
-                    target_sink = "" # Empty string means default sink for pacat
-            except Exception as e:
-                log.warning(f"[{client}] pactl list sinks failed: {e}")
 
             if fmt == 'pcmu':
                 # PCMU: FFmpeg with zero probing (format pre-specified)
@@ -203,17 +194,15 @@ class BackchannelServer:
                     '-ac', '1', '-ar', '48000', '-af', 'volume=4.0',
                     '-f', 's16le', '-flush_packets', '1', 'pipe:1'
                 ]
-                pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1', '--latency-msec=30']
-                if target_sink:
-                    pacat_cmd.extend(['--device', target_sink])
-
+                pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1',
+                             '--latency-msec=30', '--device', self.sink]
                 self.process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE, stderr=sys.stderr)
+                                                stdout=subprocess.PIPE, stderr=err)
                 self.pacat = subprocess.Popen(pacat_cmd, stdin=self.process.stdout,
-                                              stdout=subprocess.DEVNULL, stderr=sys.stderr)
+                                              stdout=subprocess.DEVNULL, stderr=err)
                 self.process.stdout.close()
                 log.info(f"[{client}] PCMU FFmpeg→pacat (zero-probe) "
-                         f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid}, sink={target_sink or 'default'})")
+                         f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid})")
             else:
                 # WebM/Opus: FFmpeg decode → pacat playback
                 ffmpeg_cmd = [
@@ -226,17 +215,15 @@ class BackchannelServer:
                     '-ac', '1', '-ar', '48000', '-af', 'volume=4.0',
                     '-f', 's16le', '-flush_packets', '1', 'pipe:1'
                 ]
-                pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1', '--latency-msec=50']
-                if target_sink:
-                    pacat_cmd.extend(['--device', target_sink])
-
+                pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1',
+                             '--latency-msec=50', '--device', self.sink]
                 self.process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE, stderr=sys.stderr)
+                                                stdout=subprocess.PIPE, stderr=err)
                 self.pacat = subprocess.Popen(pacat_cmd, stdin=self.process.stdout,
-                                              stdout=subprocess.DEVNULL, stderr=sys.stderr)
+                                              stdout=subprocess.DEVNULL, stderr=err)
                 self.process.stdout.close()
                 log.info(f"[{client}] WebM/Opus FFmpeg→pacat "
-                         f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid}, sink={target_sink or 'default'})")
+                         f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid})")
 
             return True
         except Exception as e:
@@ -331,12 +318,9 @@ class BackchannelServer:
 
                 # ── Pipeline running: stream data ──
 
-                # Restart if ffmpeg or pacat crashed
-                ffmpeg_crashed = self.process.poll() is not None
-                pacat_crashed = self.pacat and self.pacat.poll() is not None
-                if ffmpeg_crashed or pacat_crashed:
-                    err_msg = f"ffmpeg={self.process.poll()}" if ffmpeg_crashed else f"pacat={self.pacat.poll()}"
-                    log.warning(f"[{client}] Pipeline crashed ({err_msg}), restarting")
+                # Restart if ffmpeg crashed
+                if self.process.poll() is not None:
+                    log.warning(f"[{client}] FFmpeg exited ({self.process.returncode}), restarting")
                     self.stop_pipeline()
                     await asyncio.sleep(0.1)
                     if fmt == 'webm':
