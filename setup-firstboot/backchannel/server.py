@@ -181,6 +181,7 @@ class BackchannelServer:
     def start_pipeline(self, client: str, fmt: str) -> bool:
         """Start audio pipeline. PCMU→pacat direct, WebM→FFmpeg→pacat."""
         try:
+            err = open(f'/tmp/backchannel_{client.replace(":", "_")}.log', 'a')
 
             if fmt == 'pcmu':
                 # PCMU: FFmpeg with zero probing (format pre-specified)
