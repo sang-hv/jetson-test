@@ -134,7 +134,7 @@ def has_echocancel() -> bool:
     log(f"    PULSE_SERVER: {os.environ.get('PULSE_SERVER', '<not set>')}")
     log(f"    HOME: {os.environ.get('HOME', '<not set>')}")
 
-    for attempt in range(45):  # Wait up to ~90 seconds
+    for attempt in range(10):
         try:
             result = subprocess.run(
                 ["pactl", "list", "short", "sources"],
@@ -144,15 +144,13 @@ def has_echocancel() -> bool:
             )
             log(f"    pactl exit={result.returncode} stdout='{result.stdout.strip()[:200]}' stderr='{result.stderr.strip()[:200]}'")
             if "echocancel_source" in result.stdout:
-                # Wait an extra 2 seconds to let the dust settle (avoid module-switch-on-connect routing changes)
-                time.sleep(2)
                 return True
-            if attempt < 44:
-                log(f"  PulseAudio: echocancel not found, retry {attempt + 1}/45...")
+            if attempt < 9:
+                log(f"  PulseAudio: echocancel not found, retry {attempt + 1}/10...")
                 time.sleep(2)
         except Exception as e:
-            if attempt < 44:
-                log(f"  PulseAudio: not ready ({e}), retry {attempt + 1}/45...")
+            if attempt < 9:
+                log(f"  PulseAudio: not ready ({e}), retry {attempt + 1}/10...")
                 time.sleep(2)
     return False
 
