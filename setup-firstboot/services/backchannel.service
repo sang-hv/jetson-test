@@ -1,6 +1,8 @@
 [Unit]
 Description=Audio Backchannel Server for go2rtc
-After=network.target sound.target pulseaudio.service
+After=network.target sound.target pulseaudio.service camera-stream.service
+# Restart backchannel when camera-stream restarts (camera-stream recreates echocancel_sink)
+BindsTo=camera-stream.service
 
 [Service]
 Type=simple
