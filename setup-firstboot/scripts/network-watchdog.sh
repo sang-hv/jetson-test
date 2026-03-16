@@ -89,14 +89,14 @@ get_iface_lan() {
     done
     # Generic: first wired interface not lo/usb*/ww*
     local IFACE
-    IFACE=$(ip link show | grep -oP '^\d+: \K(eth|enp|eno|enx)\S+' | head -1)
+    IFACE=$(ls /sys/class/net 2>/dev/null | grep -E '^(eth|enp|eno|enx)' | head -1)
     [ -n "$IFACE" ] && echo "$IFACE" || return 1
 }
 
 get_iface_wifi() {
     local IFACE
     # Add support for wlP* (PCIe interfaces) alongside standard wlan/wlx/wlp
-    IFACE=$(ip link show | grep -oP '^\d+: \K(wlan|wlp|wlx|wlP)\S+' | head -1)
+    IFACE=$(ls /sys/class/net 2>/dev/null | grep -E '^(wlan|wlp|wlx|wlP)' | head -1)
     [ -n "$IFACE" ] && echo "$IFACE" || return 1
 }
 
