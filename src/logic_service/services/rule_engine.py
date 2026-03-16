@@ -122,6 +122,7 @@ async def _send_sqs_for_rule(
     detection_image_url: str | None,
     confidence: float | None,
     db: aiosqlite.Connection,
+    object_attributes: dict | None = None,
 ) -> None:
     """
     Query ai_rules by code, check time window, and send to SQS if eligible.
@@ -141,7 +142,7 @@ async def _send_sqs_for_rule(
         detected_at=detected_at,
         detection_image_url=detection_image_url,
         confidence=confidence,
-        object_attributes={},
+        object_attributes=object_attributes,
     )
 
 
@@ -314,6 +315,7 @@ async def process_animal_alert(payload: AnimalAlertPayload, db: aiosqlite.Connec
             detection_image_url=det.detection_result,
             confidence=det.confidence,
             db=db,
+            object_attributes={"class_name": det.class_name, "class_id": det.class_id},
         )
 
     return {"processed": processed}
