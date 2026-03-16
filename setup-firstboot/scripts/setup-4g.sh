@@ -170,10 +170,15 @@ bring_up_interface() {
 
     # Bring up and get IP via DHCP (MM already set up normally)
     ip link set "$IFACE" up 2>/dev/null || true
+    
+    # Clean up any stuck DHCP processes or dead IPs on this interface
+    pkill -f "dhclient.*$IFACE" 2>/dev/null || true
+    ip addr flush dev "$IFACE" 2>/dev/null || true
+    
     if ! ip addr show "$IFACE" | grep -q "inet "; then
         log "Running DHCP on $IFACE..."
-        dhclient "$IFACE" -timeout 30 2>/dev/null || \
-            udhcpc -i "$IFACE" -T 30 -t 5 2>/dev/null || true
+        dhclient "$IFACE" 2>/dev/null || \
+            udhcpc -i "$IFACE" -t 5 2>/dev/null || true
     fi
 
     # Check we got an IP
