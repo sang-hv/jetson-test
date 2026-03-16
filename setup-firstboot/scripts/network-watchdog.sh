@@ -13,7 +13,6 @@
 ###############################################################################
 
 NETWORK_CONF="/etc/device/network.conf"
-LOG_FILE="/var/log/network-watchdog.log"
 IFACE_4G_CACHE="/run/4g-interface"
 
 # Default config
@@ -30,21 +29,21 @@ LOG_TAG="net-watchdog"
 log() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [INFO]  $*" | tee -a "$LOG_FILE"
+    echo "[$TS] [INFO]  $*"
     logger -t "$LOG_TAG" "$*"
 }
 
 warn() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [WARN]  $*" | tee -a "$LOG_FILE"
+    echo "[$TS] [WARN]  $*"
     logger -t "$LOG_TAG" "WARN: $*"
 }
 
 err() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [ERROR] $*" | tee -a "$LOG_FILE" >&2
+    echo "[$TS] [ERROR] $*" >&2
     logger -t "$LOG_TAG" "ERROR: $*"
 }
 
@@ -96,7 +95,8 @@ get_iface_lan() {
 
 get_iface_wifi() {
     local IFACE
-    IFACE=$(ip link show | grep -oP '^\d+: \K(wlan|wlp|wlx)\S+' | head -1)
+    # Add support for wlP* (PCIe interfaces) alongside standard wlan/wlx/wlp
+    IFACE=$(ip link show | grep -oP '^\d+: \K(wlan|wlp|wlx|wlP)\S+' | head -1)
     [ -n "$IFACE" ] && echo "$IFACE" || return 1
 }
 
@@ -241,17 +241,32 @@ check_connectivity() {
 # Main watchdog loop
 # ---------------------------------------------------------------------------
 main() {
-    log "=== Network Watchdog Started ==="
-    log "Config: $NETWORK_CONF"
+    # Parse CLI argument to force mode
+    local FORCED_MODE=""
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            4g|lan|wifi|auto)
+                FORCED_MODE="$1"
+                ;;
+            *)
+                echo "Usage: $0 [auto|4g|lan|wifi]"
+                exit 1
+                ;;
+        esac
+    fi
 
-    # Ensure log file exists and is writable
-    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/network-watchdog.log"
+    log "=== Network Watchdog Started ==="
 
     local LAST_MODE=""
     local FAIL_COUNT=0
 
     while true; do
         load_config
+        
+        # Apply CLI override if provided
+        if [ -n "$FORCED_MODE" ]; then
+            NETWORK_MODE="$FORCED_MODE"
+        fi
 
         # Apply routing if mode changed
         if [ "$NETWORK_MODE" != "$LAST_MODE" ]; then
