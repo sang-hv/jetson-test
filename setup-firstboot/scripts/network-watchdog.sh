@@ -241,14 +241,32 @@ check_connectivity() {
 # Main watchdog loop
 # ---------------------------------------------------------------------------
 main() {
+    # Parse CLI argument to force mode
+    local FORCED_MODE=""
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            4g|lan|wifi|auto)
+                FORCED_MODE="$1"
+                ;;
+            *)
+                echo "Usage: $0 [auto|4g|lan|wifi]"
+                exit 1
+                ;;
+        esac
+    fi
+
     log "=== Network Watchdog Started ==="
-    log "Config: $NETWORK_CONF"
 
     local LAST_MODE=""
     local FAIL_COUNT=0
 
     while true; do
         load_config
+        
+        # Apply CLI override if provided
+        if [ -n "$FORCED_MODE" ]; then
+            NETWORK_MODE="$FORCED_MODE"
+        fi
 
         # Apply routing if mode changed
         if [ "$NETWORK_MODE" != "$LAST_MODE" ]; then
