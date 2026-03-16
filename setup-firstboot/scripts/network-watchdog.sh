@@ -13,7 +13,6 @@
 ###############################################################################
 
 NETWORK_CONF="/etc/device/network.conf"
-LOG_FILE="/var/log/network-watchdog.log"
 IFACE_4G_CACHE="/run/4g-interface"
 
 # Default config
@@ -30,21 +29,21 @@ LOG_TAG="net-watchdog"
 log() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [INFO]  $*" | tee -a "$LOG_FILE"
+    echo "[$TS] [INFO]  $*"
     logger -t "$LOG_TAG" "$*"
 }
 
 warn() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [WARN]  $*" | tee -a "$LOG_FILE"
+    echo "[$TS] [WARN]  $*"
     logger -t "$LOG_TAG" "WARN: $*"
 }
 
 err() {
     local TS
     TS=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$TS] [ERROR] $*" | tee -a "$LOG_FILE" >&2
+    echo "[$TS] [ERROR] $*" >&2
     logger -t "$LOG_TAG" "ERROR: $*"
 }
 
@@ -244,9 +243,6 @@ check_connectivity() {
 main() {
     log "=== Network Watchdog Started ==="
     log "Config: $NETWORK_CONF"
-
-    # Ensure log file exists and is writable
-    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/network-watchdog.log"
 
     local LAST_MODE=""
     local FAIL_COUNT=0
