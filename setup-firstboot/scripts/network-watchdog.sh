@@ -72,7 +72,7 @@ get_iface_4g() {
         fi
     fi
     # Auto-detect
-    for candidate in usb0 wwan0 wwp0s21u1i4 wwan0u1i4; do
+    for candidate in usb0 usb1 usb2 wwan0 wwp0s21u1i4 wwan0u1i4; do
         if ip link show "$candidate" &>/dev/null; then
             echo "$candidate"
             return 0
@@ -111,7 +111,8 @@ iface_has_ip() {
 iface_can_ping() {
     local IFACE="$1"
     local HOST="${2:-$PING_HOST}"
-    ping -I "$IFACE" -c 2 -W 5 -q "$HOST" &>/dev/null
+    ping -I "$IFACE" -c 2 -W 5 -q "$HOST" &>/dev/null || \
+        ping6 -I "$IFACE" -c 2 -W 5 -q 2001:4860:4860::8888 &>/dev/null
 }
 
 # ---------------------------------------------------------------------------
