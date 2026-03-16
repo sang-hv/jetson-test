@@ -1,0 +1,23 @@
+[Unit]
+Description=Network Watchdog (4G/LAN/WiFi Self-Healing)
+Documentation=man:ping(8)
+After=network.target sim7600-4g.service
+Wants=sim7600-4g.service
+# If sim7600-4g is stopped intentionally (e.g. network_mode=lan/wifi), watchdog still runs
+# to manage routing and fallback logic
+
+[Service]
+Type=simple
+ExecStart=/opt/4g/network-watchdog.sh
+
+# Always restart — watchdog must never stop
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net-watchdog
+
+[Install]
+WantedBy=multi-user.target

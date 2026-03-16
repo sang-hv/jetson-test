@@ -8,6 +8,7 @@
 #    - PulseAudio auto-config + echo cancel
 #    - Nginx reverse proxy
 #    - Cloudflare tunnel
+#    - SIM7600G-H 4G modem (ModemManager + self-healing watchdog)
 #
 #  Usage:
 #    chmod +x master-setup.sh
@@ -45,7 +46,7 @@ ACTUAL_UID=$(id -u "$ACTUAL_USER")
 echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║   Jetson Nano - Master Setup                 ║"
-echo "║   System + Livestream + Backchannel + Audio   ║"
+echo "║   System + Livestream + Backchannel + 4G     ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
 echo "  User:     $ACTUAL_USER"
@@ -333,7 +334,7 @@ log "Nginx configured"
 ###############################################################################
 # STEP 11: Audio Autostart (PulseAudio + Echo Cancel)
 ###############################################################################
-step "Step 12/13: Audio Autostart"
+step "Step 12/14: Audio Autostart"
 
 mkdir -p /opt/audio
 cp "$SCRIPT_DIR/scripts/setup-audio-autostart.sh" /opt/audio/setup-audio-autostart.sh
@@ -354,9 +355,63 @@ loginctl enable-linger "$ACTUAL_USER"
 log "Audio autostart service enabled"
 
 ###############################################################################
-# STEP 12: Final verification
+# STEP 13: SIM7600G-H 4G Module
 ###############################################################################
-step "Step 13/13: Verification"
+step "Step 13/14: SIM7600G-H 4G Module"
+
+# Install ModemManager, usb-modeswitch and minicom (for AT fallback)
+apt-get install -y -qq \
+    modemmanager \
+    libmm-glib-dev \
+    usb-modeswitch \
+    usb-modeswitch-data \
+    minicom \
+    2>&1 | tail -3 | tee -a "$LOG_FILE"
+log "ModemManager + usb-modeswitch installed"
+
+# Add user to dialout group (needed to access /dev/ttyUSB*)
+usermod -aG dialout "$ACTUAL_USER" 2>/dev/null || true
+log "User $ACTUAL_USER added to dialout group"
+
+# Enable ModemManager service
+systemctl enable ModemManager 2>/dev/null || true
+log "ModemManager service enabled"
+
+# Deploy 4G scripts and config
+mkdir -p /opt/4g
+cp "$SCRIPT_DIR/scripts/setup-4g.sh" /opt/4g/setup-4g.sh
+cp "$SCRIPT_DIR/scripts/network-watchdog.sh" /opt/4g/network-watchdog.sh
+chmod +x /opt/4g/setup-4g.sh /opt/4g/network-watchdog.sh
+log "4G scripts deployed → /opt/4g/"
+
+# Deploy network config (only if not already present — preserve user edits)
+if [ ! -f /etc/device/network.conf ]; then
+    cp "$SCRIPT_DIR/config/network.conf" /etc/device/network.conf
+    log "Network config → /etc/device/network.conf"
+else
+    log "Network config already exists — skipping (edit /etc/device/network.conf manually)"
+fi
+
+# Install systemd services
+cp "$SCRIPT_DIR/services/sim7600-4g.service" /etc/systemd/system/sim7600-4g.service
+cp "$SCRIPT_DIR/services/network-watchdog.service" /etc/systemd/system/network-watchdog.service
+systemctl daemon-reload
+systemctl enable sim7600-4g.service network-watchdog.service
+log "sim7600-4g + network-watchdog services enabled"
+
+# Verify modem detection (best-effort — may not be plugged in yet)
+if ls /dev/ttyUSB* &>/dev/null; then
+    log "SIM7600 USB device detected: $(ls /dev/ttyUSB* | tr '\n' ' ')"
+elif lsusb | grep -iq "simcom\|sim7600\|qualcomm"; then
+    log "SIM7600 visible in lsusb (USB device list)"
+else
+    warn "SIM7600 not detected yet — ensure USB cable is connected and jumpers set to PWR+5V+AUTO"
+fi
+
+###############################################################################
+# STEP 14: Final verification
+###############################################################################
+step "Step 14/14: Verification"
 
 echo "" | tee -a "$LOG_FILE"
 echo "  Versions:" | tee -a "$LOG_FILE"
@@ -368,7 +423,7 @@ echo "    nginx:       $(nginx -v 2>&1)" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # Verify services are enabled
-for svc in go2rtc backchannel cloudflared nginx; do
+for svc in go2rtc backchannel cloudflared nginx ModemManager sim7600-4g network-watchdog; do
     if systemctl is-enabled "$svc" >/dev/null 2>&1; then
         log "Service $svc: enabled ✓"
     else
@@ -392,12 +447,20 @@ echo "    Config:      /etc/device/config.json"
 echo "    Faces:       $DATA_DIR/faces/embeddings.json"
 echo ""
 echo "  Services:"
-echo "    go2rtc       → sudo systemctl status go2rtc"
-echo "    backchannel  → sudo systemctl status backchannel"
-echo "    cloudflared  → sudo systemctl status cloudflared"
-echo "    nginx        → sudo systemctl status nginx"
-echo "    audio-auto   → systemctl --user status audio-autostart"
-echo "    sync-config  → crontab -l (every 5 min)"
+echo "    go2rtc          → sudo systemctl status go2rtc"
+echo "    backchannel     → sudo systemctl status backchannel"
+echo "    cloudflared     → sudo systemctl status cloudflared"
+echo "    nginx           → sudo systemctl status nginx"
+echo "    audio-auto      → systemctl --user status audio-autostart"
+echo "    sync-config     → crontab -l (every 5 min)"
+echo "    sim7600-4g      → sudo systemctl status sim7600-4g"
+echo "    net-watchdog    → sudo systemctl status network-watchdog"
+echo ""
+echo "  4G Network:"
+echo "    Mode config:    /etc/device/network.conf"
+echo "    4G interface:   cat /run/4g-interface"
+echo "    Watchdog log:   tail -f /var/log/network-watchdog.log"
+echo "    AT port:        /dev/ttyUSB2"
 echo ""
 echo "  ⚠️  Action required:"
 if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ]; then
