@@ -164,14 +164,6 @@ set_metric() {
     local IFACE="$1"
     local METRIC="$2"
     
-    # Prevent NetworkManager from reverting the metric back to defaults
-    local CONN
-    CONN=$(nmcli -t -f DEVICE,NAME dev status 2>/dev/null | grep "^${IFACE}:" | cut -d: -f2 | head -1)
-    if [ -n "$CONN" ] && [ "$CONN" != "unmanaged" ] && [ "$CONN" != "disconnected" ]; then
-        nmcli connection modify "$CONN" ipv4.route-metric "$METRIC" 2>/dev/null || true
-        nmcli device reapply "$IFACE" 2>/dev/null || true
-    fi
-    
     # Extract only the exact Gateway IP for this interface
     local GW
     GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
