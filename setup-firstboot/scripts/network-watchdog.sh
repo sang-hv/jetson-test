@@ -159,23 +159,23 @@ apply_routing() {
 set_metric() {
     local IFACE="$1"
     local METRIC="$2"
-    # Change default route metric for interface (via ip route)
+    
+    # Extract only the exact Gateway IP for this interface
     local GW
-    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "default" | awk '{print $3}' | head -1)
+    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
+    
     if [ -n "$GW" ]; then
-        # Delete old default route for this interface and re-add with new metric
-        ip route del default via "$GW" dev "$IFACE" 2>/dev/null || true
+        # Flush all default routes for this interface
+        ip route flush default dev "$IFACE" 2>/dev/null || true
+        # Re-add purely with the known GW and new Metric
         ip route add default via "$GW" dev "$IFACE" metric "$METRIC" 2>/dev/null || true
-    fi
-    # Also for routes without explicit gateway (e.g. PPP-style or /0 route)
-    local SUBNET
-    while IFS= read -r route; do
-        if echo "$route" | grep -qv "default"; then
-            continue
+    else
+        # If it's a point-to-point without 'via' (like some wwan/usb setups)
+        if ip route show dev "$IFACE" 2>/dev/null | grep -q "^default"; then
+            ip route flush default dev "$IFACE" 2>/dev/null || true
+            ip route add default dev "$IFACE" metric "$METRIC" 2>/dev/null || true
         fi
-        ip route del $route 2>/dev/null || true
-        ip route add $route metric "$METRIC" 2>/dev/null || true
-    done < <(ip route show dev "$IFACE" 2>/dev/null | grep "default")
+    fi
 }
 
 # ---------------------------------------------------------------------------
