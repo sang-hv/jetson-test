@@ -184,8 +184,17 @@ bring_up_interface() {
     # Check we got an IP
     if ip addr show "$IFACE" | grep -q "inet "; then
         local IP
+        local GW
         IP=$(ip addr show "$IFACE" | grep "inet " | awk '{print $2}')
-        log "4G IP: $IP on $IFACE"
+        # Extract default gateway from DHCP lease or try to assume standard .1 address for 4G modems
+        GW=$(ip route show dev "$IFACE" | grep -oP 'via \K\S+' | head -1)
+        if [ -z "$GW" ]; then
+            # If DHCP didn't set a default route, guess it from the IP base (common on SIM7600)
+            GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
+            ip route add default via "$GW" dev "$IFACE" 2>/dev/null || true
+        fi
+        
+        log "4G IP: $IP on $IFACE (GW: $GW)"
         echo "$IFACE" > /run/4g-interface
         return 0
     else
