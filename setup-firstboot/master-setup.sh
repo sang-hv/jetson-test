@@ -381,7 +381,8 @@ log "ModemManager service enabled"
 mkdir -p /opt/4g
 cp "$SCRIPT_DIR/scripts/setup-4g.sh" /opt/4g/setup-4g.sh
 cp "$SCRIPT_DIR/scripts/network-watchdog.sh" /opt/4g/network-watchdog.sh
-chmod +x /opt/4g/setup-4g.sh /opt/4g/network-watchdog.sh
+cp "$SCRIPT_DIR/scripts/switch-network.sh" /opt/4g/switch-network.sh
+chmod +x /opt/4g/setup-4g.sh /opt/4g/network-watchdog.sh /opt/4g/switch-network.sh
 log "4G scripts deployed → /opt/4g/"
 
 # Deploy network config (only if not already present — preserve user edits)
