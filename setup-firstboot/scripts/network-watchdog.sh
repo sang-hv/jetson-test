@@ -176,6 +176,15 @@ set_metric() {
     local GW
     GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
     
+    # Cứu hộ khẩn cấp: Nếu thẻ mạng có IP nhưng bị DHCP ngầm xoá mất Default Gateway
+    if [ -z "$GW" ]; then
+        local IP
+        IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
+        if [ -n "$IP" ]; then
+            GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
+        fi
+    fi
+
     if [ -n "$GW" ]; then
         # Flush all default routes for this interface
         ip route flush default dev "$IFACE" 2>/dev/null || true
