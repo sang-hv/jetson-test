@@ -153,6 +153,10 @@ apply_routing() {
             ;;
     esac
 
+    # Cực kỳ quan trọng: Xoá bộ nhớ đệm định tuyến của nhân Linux
+    # Nếu không có lệnh này, các kết nối đang mở sẽ tiếp tục dùng đường cũ (cache)
+    ip route flush cache 2>/dev/null || true
+
     log "Routing applied [mode=$MODE]: 4G=$IFACE_4G LAN=$IFACE_LAN WiFi=$IFACE_WIFI"
 }
 
