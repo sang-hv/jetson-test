@@ -133,12 +133,23 @@ connect_4g() {
 bring_up_interface() {
     # ModemManager with DHCP
     local IFACE=""
-    for candidate in usb0 wwan0 wwp0s21u1i4 wwan0u1i4; do
-        if ip link show "$candidate" &>/dev/null; then
-            IFACE="$candidate"
-            break
-        fi
-    done
+    
+    # Try getting the exact data interface from ModemManager first
+    local BEARER_IFACE
+    BEARER_IFACE=$(mmcli -m "$MODEM_IDX" 2>/dev/null | grep -i "\/Bearer\/" | awk -F'/' '{print $NF}' | head -1)
+    if [ -n "$BEARER_IFACE" ]; then
+        IFACE=$(mmcli -b "$BEARER_IFACE" 2>/dev/null | grep -oP 'interface: \K\S+' | tr -d "'" || true)
+    fi
+
+    # Fallback if mmcli doesn't show it
+    if [ -z "$IFACE" ] || ! ip link show "$IFACE" &>/dev/null; then
+        for candidate in usb2 usb1 usb0 wwan0 wwp0s21u1i4 wwan0u1i4; do
+            if ip link show "$candidate" &>/dev/null; then
+                IFACE="$candidate"
+                break
+            fi
+        done
+    fi
 
     if [ -z "$IFACE" ]; then
         warn "No 4G network interface found (usb0/wwan0). Trying NetworkManager..."
