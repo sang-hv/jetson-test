@@ -96,7 +96,8 @@ get_iface_lan() {
 
 get_iface_wifi() {
     local IFACE
-    IFACE=$(ip link show | grep -oP '^\d+: \K(wlan|wlp|wlx)\S+' | head -1)
+    # Add support for wlP* (PCIe interfaces) alongside standard wlan/wlx/wlp
+    IFACE=$(ip link show | grep -oP '^\d+: \K(wlan|wlp|wlx|wlP)\S+' | head -1)
     [ -n "$IFACE" ] && echo "$IFACE" || return 1
 }
 
