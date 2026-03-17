@@ -167,17 +167,18 @@ class Config:
             try:
                 _conn = _sqlite3.connect(_db_path)
                 _row = _conn.execute(
-                    "SELECT coordinates FROM detection_zones WHERE code = 'entry_exit' LIMIT 1"
+                    "SELECT coordinates, in_direction_point FROM detection_zones WHERE code = 'entry_exit' LIMIT 1"
                 ).fetchone()
                 _conn.close()
                 if _row:
                     _coords = _json.loads(_row[0])
-                    if len(_coords) >= 3:
+                    _in_pt = _json.loads(_row[1]) if _row[1] else None
+                    if len(_coords) >= 2 and _in_pt:
                         counting_line_start = (float(_coords[0]["x"]), float(_coords[0]["y"]))
                         counting_line_end = (float(_coords[1]["x"]), float(_coords[1]["y"]))
-                        counting_in_direction_point = (float(_coords[2]["x"]), float(_coords[2]["y"]))
+                        counting_in_direction_point = (float(_in_pt["x"]), float(_in_pt["y"]))
                     else:
-                        print("Warning: entry_exit zone needs at least 3 points")
+                        print("Warning: entry_exit needs 2 line points and in_direction_point")
                 else:
                     print("Warning: No entry_exit detection zone found in DB, using defaults")
             except Exception as e:
