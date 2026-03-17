@@ -167,45 +167,72 @@ nm_set_route_metric() {
 }
 
 # ---------------------------------------------------------------------------
-# Set default route priority (metric) per network mode
+# Set default route priority (metric) per network mode + active interface.
 #
 # Lower metric = higher priority.
-# Priority interface gets metric 50; others get 700+.
+# Priority (active) interface gets metric 50; others get 700+.
 # ---------------------------------------------------------------------------
 apply_routing() {
     local MODE="$1"
+    local ACTIVE_IFACE="${2:-}"
     local IFACE_4G IFACE_LAN IFACE_WIFI
 
     IFACE_4G=$(get_iface_4g 2>/dev/null) || IFACE_4G=""
     IFACE_LAN=$(get_iface_lan 2>/dev/null) || IFACE_LAN=""
     IFACE_WIFI=$(get_iface_wifi 2>/dev/null) || IFACE_WIFI=""
 
-    case "$MODE" in
-        4g)
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   50
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  700
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
-            ;;
-        lan)
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
-            ;;
-        wifi)
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 50
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  800
-            ;;
-        auto|*)
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 60
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   70
-            ;;
-    esac
+    # Nếu có ACTIVE_IFACE (do check_connectivity chọn), luôn cho nó ưu tiên cao nhất.
+    if [ -n "$ACTIVE_IFACE" ]; then
+        if [ -n "$IFACE_LAN" ]; then
+            if [ "$ACTIVE_IFACE" = "$IFACE_LAN" ]; then
+                set_metric "$IFACE_LAN" 50
+            else
+                set_metric "$IFACE_LAN" 700
+            fi
+        fi
+        if [ -n "$IFACE_WIFI" ]; then
+            if [ "$ACTIVE_IFACE" = "$IFACE_WIFI" ]; then
+                set_metric "$IFACE_WIFI" 50
+            else
+                set_metric "$IFACE_WIFI" 800
+            fi
+        fi
+        if [ -n "$IFACE_4G" ]; then
+            if [ "$ACTIVE_IFACE" = "$IFACE_4G" ]; then
+                set_metric "$IFACE_4G" 50
+            else
+                set_metric "$IFACE_4G" 800
+            fi
+        fi
+    else
+        # Không có ACTIVE_IFACE: dùng ưu tiên cơ bản theo MODE
+        case "$MODE" in
+            4g)
+                [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   50
+                [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  700
+                [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
+                ;;
+            lan)
+                [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
+                [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
+                [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
+                ;;
+            wifi)
+                [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 50
+                [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
+                [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  800
+                ;;
+            auto|*)
+                [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
+                [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 60
+                [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   70
+                ;;
+        esac
+    fi
 
     ip route flush cache 2>/dev/null || true
 
-    log "Routing applied [mode=$MODE]: 4G=$IFACE_4G LAN=$IFACE_LAN WiFi=$IFACE_WIFI"
+    log "Routing applied [mode=$MODE, active=$ACTIVE_IFACE]: 4G=$IFACE_4G LAN=$IFACE_LAN WiFi=$IFACE_WIFI"
 
     local ACTUAL_DEV
     ACTUAL_DEV=$(ip route get "$PING_HOST" 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
@@ -270,8 +297,10 @@ heal_4g() {
 }
 
 # ---------------------------------------------------------------------------
-# Check connectivity for current priority interface
-# Returns: 0=ok, 1=fail
+# Check connectivity and choose active interface according to priority:
+# - Luôn ưu tiên lựa chọn của người dùng (MODE)
+# - Nếu lựa chọn đó không có mạng, fallback theo thứ tự: LAN → WiFi → 4G
+# Trả về: echo tên interface đang có mạng (hoặc rỗng) và exit code 0/1.
 # ---------------------------------------------------------------------------
 check_connectivity() {
     local MODE="$1"
@@ -280,29 +309,33 @@ check_connectivity() {
     IFACE_LAN=$(get_iface_lan 2>/dev/null) || IFACE_LAN=""
     IFACE_WIFI=$(get_iface_wifi 2>/dev/null) || IFACE_WIFI=""
 
-    # Determine primary interface per mode
-    local PRIMARY=""
+    local ORDER=""
     case "$MODE" in
-        4g)   PRIMARY="$IFACE_4G" ;;
-        lan)  PRIMARY="$IFACE_LAN" ;;
-        wifi) PRIMARY="$IFACE_WIFI" ;;
-        auto|*) PRIMARY="$IFACE_4G" ;;
+        lan)
+            ORDER="$IFACE_LAN $IFACE_WIFI $IFACE_4G"
+            ;;
+        wifi)
+            ORDER="$IFACE_WIFI $IFACE_LAN $IFACE_4G"
+            ;;
+        4g)
+            ORDER="$IFACE_4G $IFACE_LAN $IFACE_WIFI"
+            ;;
+        auto|*)
+            ORDER="$IFACE_LAN $IFACE_WIFI $IFACE_4G"
+            ;;
     esac
 
-    if [ -n "$PRIMARY" ] && iface_has_ip "$PRIMARY" && iface_can_ping "$PRIMARY"; then
-        return 0
-    fi
-
-    # Primary failed — try fallbacks
-    for FALLBACK in "$IFACE_LAN" "$IFACE_WIFI" "$IFACE_4G"; do
-        [ "$FALLBACK" = "$PRIMARY" ] && continue
-        [ -z "$FALLBACK" ] && continue
-        if iface_has_ip "$FALLBACK" && iface_can_ping "$FALLBACK"; then
-            warn "Primary $PRIMARY down — using fallback $FALLBACK"
+    local CAND
+    for CAND in $ORDER; do
+        [ -z "$CAND" ] && continue
+        if iface_has_ip "$CAND" && iface_can_ping "$CAND"; then
+            echo "$CAND"
             return 0
         fi
     done
 
+    # Không interface nào có mạng
+    echo ""
     return 1
 }
 
@@ -340,7 +373,7 @@ main() {
         if [ "$RELOAD_REQUESTED" -eq 1 ]; then
             log "Reload requested — forcing routing re-apply for mode '$NETWORK_MODE'"
             RELOAD_REQUESTED=0
-            apply_routing "$NETWORK_MODE"
+            apply_routing "$NETWORK_MODE" ""
             LAST_MODE="$NETWORK_MODE"
             FAIL_COUNT=0
             sleep 2
@@ -349,12 +382,15 @@ main() {
 
         if [ "$NETWORK_MODE" != "$LAST_MODE" ]; then
             log "Network mode changed: '$LAST_MODE' → '$NETWORK_MODE'"
-            apply_routing "$NETWORK_MODE"
+            apply_routing "$NETWORK_MODE" ""
             LAST_MODE="$NETWORK_MODE"
             FAIL_COUNT=0
         fi
-
-        if check_connectivity "$NETWORK_MODE"; then
+        # Chọn interface đang thực sự có mạng theo thứ tự ưu tiên
+        ACTIVE_IFACE=$(check_connectivity "$NETWORK_MODE")
+        if [ $? -eq 0 ]; then
+            # Áp dụng routing: ép ACTIVE_IFACE thành default route (metric thấp nhất)
+            apply_routing "$NETWORK_MODE" "$ACTIVE_IFACE"
             if [ $FAIL_COUNT -gt 0 ]; then
                 log "Connectivity restored (was down for ${FAIL_COUNT} checks)"
             fi
@@ -367,7 +403,7 @@ main() {
                 err "Network down after $MAX_RETRIES checks — triggering self-heal"
                 heal_4g
                 sleep 5
-                apply_routing "$NETWORK_MODE"
+                apply_routing "$NETWORK_MODE" ""
                 FAIL_COUNT=0
             fi
         fi
