@@ -268,8 +268,9 @@ class StrangerAlertManager:
     stranger remains in the zone and unrecognized.
     """
 
-    def __init__(self, alert_interval: float = 10.0):
+    def __init__(self, alert_interval: float = 10.0, grace_period: float = 0.0):
         self._alert_interval = alert_interval
+        self._grace_period = grace_period
         self._tracked_strangers: dict[int, _StrangerAlertState] = {}
         self._lock = threading.Lock()
 
@@ -295,7 +296,10 @@ class StrangerAlertManager:
 
             for tid, info in stranger_in_zone.items():
                 if tid not in self._tracked_strangers:
-                    # New stranger — alert immediately
+                    # New stranger in IN zone — check grace period
+                    created_at = info.get("created_at", now)
+                    if now - created_at < self._grace_period:
+                        continue  # Still within grace period, skip
                     self._tracked_strangers[tid] = _StrangerAlertState(
                         track_id=tid, last_alert_time=now, alert_count=1,
                     )

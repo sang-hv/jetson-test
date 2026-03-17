@@ -103,6 +103,7 @@ class Config:
     # Stranger alert settings (loaded from .env)
     stranger_alert_enabled: bool = False
     stranger_alert_interval: float = 10.0
+    stranger_alert_grace_period: float = 0.0
 
     # Animal detection settings (loaded from .env)
     animal_detection_enabled: bool = False
@@ -161,6 +162,7 @@ class Config:
         # Parse stranger alert settings from .env
         stranger_alert_enabled = env_vars.get("STRANGER_ALERT_ENABLED", "false").lower() == "true"
         stranger_alert_interval = float(env_vars.get("STRANGER_ALERT_INTERVAL", "10"))
+        stranger_alert_grace_period = float(env_vars.get("STRANGER_ALERT_GRACE_PERIOD", "0"))
 
         # Parse animal detection settings from .env
         animal_detection_enabled = env_vars.get("ANIMAL_DETECTION_ENABLED", "false").lower() == "true"
@@ -213,6 +215,7 @@ class Config:
             # Stranger alert from .env
             stranger_alert_enabled=stranger_alert_enabled,
             stranger_alert_interval=stranger_alert_interval,
+            stranger_alert_grace_period=stranger_alert_grace_period,
             # Animal detection from .env
             animal_detection_enabled=animal_detection_enabled,
             animal_alert_interval=animal_alert_interval,
@@ -380,8 +383,9 @@ class Pipeline:
 
             self.stranger_alert_manager = StrangerAlertManager(
                 alert_interval=config.stranger_alert_interval,
+                grace_period=config.stranger_alert_grace_period,
             )
-            print(f"Stranger alert: Enabled (interval={config.stranger_alert_interval}s)")
+            print(f"Stranger alert: Enabled (interval={config.stranger_alert_interval}s, grace_period={config.stranger_alert_grace_period}s)")
         elif config.stranger_alert_enabled and not config.counting_enabled:
             print("[Pipeline] WARNING: Stranger alert requires COUNTING_ENABLED=true")
 
@@ -554,7 +558,10 @@ class Pipeline:
                         continue  # Skip stale/inactive tracks
                     info = track_infos[tid]
                     pid = info.get("person_id", "Unknown")
-                    if pid == "Unknown" or pid.endswith("?"):
+                    if pid == "Unknown":
+                        created_at = self.track_manager.get_track_created_at(tid)
+                        if created_at is not None:
+                            info["created_at"] = created_at
                         stranger_in_zone[tid] = info
                 alerts = self.stranger_alert_manager.update(stranger_in_zone)
                 if alerts and self.zmq_publisher is not None:
