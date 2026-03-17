@@ -1,7 +1,7 @@
 streams:
   # camera-stream.service → tcpserversink :8553 → tcpclientsrc here
   camera:
-    - exec:gst-launch-1.0 -q tcpclientsrc host=localhost port=8553 ! fdsink fd=1
+    - tcp://localhost:8553
 
 api:
   listen: ":1984"

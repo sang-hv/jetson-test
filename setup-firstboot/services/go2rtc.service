@@ -2,6 +2,7 @@
 Description=go2rtc streaming server
 After=network.target camera-stream.service
 Wants=camera-stream.service
+BindsTo=camera-stream.service
 
 [Service]
 Type=simple
