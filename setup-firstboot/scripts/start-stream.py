@@ -41,6 +41,10 @@ AI_MAX_FPS = 5   # 3fps is enough for AI detection
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
 JPEG_QUALITY = 85  # higher quality for photo capture
 
+# Health watchdog: if no frame produced for this many seconds, pipeline is stalled → exit
+HEALTH_TIMEOUT_SEC = 30
+WATCHDOG_NOTIFY = True  # notify systemd WatchdogSec
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -50,6 +54,59 @@ def log(msg: str) -> None:
 
 def err(msg: str) -> None:
     print(f"[stream] ERROR: {msg}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Health watchdog — detect stalled pipeline and auto-exit
+# ---------------------------------------------------------------------------
+_last_frame_time = time.monotonic()
+_last_frame_lock = threading.Lock()
+
+
+def touch_health():
+    """Called every time a frame is produced (stream or AI branch)."""
+    global _last_frame_time
+    with _last_frame_lock:
+        _last_frame_time = time.monotonic()
+
+
+def _sd_notify(state: str):
+    """Send sd_notify message (READY=1, WATCHDOG=1, etc.) via $NOTIFY_SOCKET."""
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    import socket
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        if addr.startswith("@"):
+            addr = "\0" + addr[1:]
+        sock.sendto(state.encode(), addr)
+        sock.close()
+    except Exception:
+        pass
+
+
+def health_watchdog(pipeline, loop):
+    """Background thread: exits process if pipeline stalls (no frames for HEALTH_TIMEOUT_SEC)."""
+    while True:
+        time.sleep(10)
+        with _last_frame_lock:
+            elapsed = time.monotonic() - _last_frame_time
+
+        if elapsed < HEALTH_TIMEOUT_SEC:
+            _sd_notify("WATCHDOG=1")
+        else:
+            err(f"HEALTH WATCHDOG: no frame for {elapsed:.0f}s (limit {HEALTH_TIMEOUT_SEC}s) — forcing restart")
+            try:
+                pipeline.set_state(Gst.State.NULL)
+            except Exception:
+                pass
+            try:
+                loop.quit()
+            except Exception:
+                pass
+            time.sleep(2)
+            os._exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +172,7 @@ def on_new_sample(sink) -> Gst.FlowReturn:
     jpeg_data = bytes(map_info.data)
     buf.unmap(map_info)
 
+    touch_health()
     publish_frame(jpeg_data, buf.pts)
 
     return Gst.FlowReturn.OK
@@ -265,6 +323,12 @@ def main() -> int:
     pipeline.set_state(Gst.State.PLAYING)
     log("Pipeline PLAYING")
 
+    # Notify systemd we're ready
+    _sd_notify("READY=1")
+
+    # Start health watchdog thread
+    touch_health()
+
     # Main loop
     loop = GLib.MainLoop()
 
@@ -299,6 +363,11 @@ def main() -> int:
             log(f"WARNING: {warning.message}")
 
     bus.connect("message", on_bus_message)
+
+    # Health watchdog: auto-exit if pipeline stalls
+    wd = threading.Thread(target=health_watchdog, args=(pipeline, loop), daemon=True)
+    wd.start()
+    log(f"Health watchdog started (timeout={HEALTH_TIMEOUT_SEC}s)")
 
     try:
         loop.run()
