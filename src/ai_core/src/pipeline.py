@@ -93,7 +93,8 @@ class Config:
     ppe_confidence_threshold: float = 0.5
     ppe_model_path: str = "yolov8m-protective-equipment-detection.pt"
 
-    # People counting (line crossing) settings (loaded from .env)
+    # People counting (line crossing) settings
+    # Line + in_direction_point loaded from DB (detection_zones, code='entry_exit')
     counting_enabled: bool = False
     counting_line_start: Tuple[float, float] = (0.0, 0.5)
     counting_line_end: Tuple[float, float] = (1.0, 0.5)
@@ -152,14 +153,35 @@ class Config:
 
         # Parse counting settings from .env
         counting_enabled = env_vars.get("COUNTING_ENABLED", "false").lower() == "true"
-        counting_line_start_str = env_vars.get("COUNTING_LINE_START", "0.0,0.5")
-        counting_line_end_str = env_vars.get("COUNTING_LINE_END", "1.0,0.5")
-        counting_line_start = tuple(float(v) for v in counting_line_start_str.split(","))
-        counting_line_end = tuple(float(v) for v in counting_line_end_str.split(","))
-        counting_in_direction_point_str = env_vars.get("COUNTING_IN_DIRECTION_POINT", "0.5,0.25")
-        counting_in_direction_point = tuple(float(v) for v in counting_in_direction_point_str.split(","))
+        counting_line_start: Tuple[float, float] = (0.0, 0.5)
+        counting_line_end: Tuple[float, float] = (1.0, 0.5)
+        counting_in_direction_point: Tuple[float, float] = (0.5, 0.25)
         counting_cleanup_max_age = int(env_vars.get("COUNTING_CLEANUP_MAX_AGE", "150"))
         zmq_publish_port = int(env_vars.get("ZMQ_PUBLISH_PORT", "5555"))
+
+        # Load counting line from DB (detection_zones where code='entry_exit')
+        if counting_enabled:
+            import json as _json
+            import sqlite3 as _sqlite3
+            _db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
+            try:
+                _conn = _sqlite3.connect(_db_path)
+                _row = _conn.execute(
+                    "SELECT coordinates FROM detection_zones WHERE code = 'entry_exit' LIMIT 1"
+                ).fetchone()
+                _conn.close()
+                if _row:
+                    _coords = _json.loads(_row[0])
+                    if len(_coords) >= 3:
+                        counting_line_start = (float(_coords[0]["x"]), float(_coords[0]["y"]))
+                        counting_line_end = (float(_coords[1]["x"]), float(_coords[1]["y"]))
+                        counting_in_direction_point = (float(_coords[2]["x"]), float(_coords[2]["y"]))
+                    else:
+                        print("Warning: entry_exit zone needs at least 3 points")
+                else:
+                    print("Warning: No entry_exit detection zone found in DB, using defaults")
+            except Exception as e:
+                print(f"Warning: Failed to load entry_exit zone from DB: {e}")
 
         # Parse stranger alert settings from .env
         stranger_alert_enabled = env_vars.get("STRANGER_ALERT_ENABLED", "false").lower() == "true"
