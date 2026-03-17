@@ -18,8 +18,6 @@ CONF_FILE="/etc/device/network.conf"
 case "$MODE" in
     auto|4g|lan|wifi)
         echo "Switching network mode to: $MODE"
-        systemctl restart network-watchdog
-        sleep 5
         
         # Replace the NETWORK_MODE line in the config file
         if grep -q "^NETWORK_MODE=" "$CONF_FILE"; then
@@ -30,7 +28,7 @@ case "$MODE" in
         
         echo "Restarting network-watchdog service..."
         systemctl restart network-watchdog
-        sleep 3
+        sleep 5
         echo "Network mode updated successfully."
         ;;
     *)
