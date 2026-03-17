@@ -1,7 +1,6 @@
 [Unit]
 Description=Camera Stream Pipeline (CSI + AI + TCP)
 After=network.target sound.target pulseaudio.service nvargus-daemon.service
-Wants=audio-autostart.service
 
 [Service]
 Type=notify
@@ -10,12 +9,15 @@ Group=audio
 NotifyAccess=main
 
 # Reset GPU/camera before start (frees leaked memory from previous runs)
-# Chạy khi restart sau OOM — nvargus-daemon tự restart khi camera-stream bị kill
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
 
-# Reset PulseAudio echo-cancel module before starting (prevents silent audio after crash)
-ExecStartPre=/bin/bash -c 'U=$(id -u __USER__); export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; /opt/audio/setup-audio-autostart.sh'
+# Kill stale PulseAudio echo-cancel, then reload fresh via setup-audio-autostart.sh
+ExecStartPre=/bin/bash -c '\
+  U=$(id -u __USER__); \
+  export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+  pactl unload-module module-echo-cancel 2>/dev/null || true; \
+  /opt/audio/setup-audio-autostart.sh'
 ExecStartPre=/bin/sleep 1
 
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
