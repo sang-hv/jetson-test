@@ -178,7 +178,7 @@ set_metric() {
     fi
 
     # Chỉ xoá bỏ các metric phụ trợ do chính nhánh gán ra (tránh cắn lầm metric mặc định của NM: 100, 600)
-    for m in 50 60 70 100 200 300 500 600 700 800 900; do
+    for m in 50 60 70 700 800; do
         ip route del default dev "$IFACE" metric $m 2>/dev/null || true
     done
     
