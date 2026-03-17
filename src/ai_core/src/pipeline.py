@@ -558,7 +558,7 @@ class Pipeline:
                         continue  # Skip stale/inactive tracks
                     info = track_infos[tid]
                     pid = info.get("person_id", "Unknown")
-                    if pid == "Unknown" or pid.endswith("?"):
+                    if pid == "Unknown":
                         created_at = self.track_manager.get_track_created_at(tid)
                         if created_at is not None:
                             info["created_at"] = created_at
