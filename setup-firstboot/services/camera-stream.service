@@ -12,13 +12,15 @@ NotifyAccess=main
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
 
-# Kill stale PulseAudio echo-cancel, then reload fresh via setup-audio-autostart.sh
-ExecStartPre=/bin/bash -c '\
+# Restart audio-autostart in the real user session (needs D-Bus for PulseAudio)
+ExecStartPre=+/bin/bash -c '\
   U=$(id -u __USER__); \
-  export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; \
-  pactl unload-module module-echo-cancel 2>/dev/null || true; \
-  /opt/audio/setup-audio-autostart.sh'
-ExecStartPre=/bin/sleep 1
+  su - __USER__ -c "\
+    export XDG_RUNTIME_DIR=/run/user/$U \
+           DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus \
+           PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+    systemctl --user restart audio-autostart.service"'
+ExecStartPre=/bin/sleep 2
 
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
