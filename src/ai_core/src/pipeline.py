@@ -29,6 +29,7 @@ from .utils import (
     crop_with_padding,
     draw_counting_info,
     draw_counting_line,
+    draw_in_zone_overlay,
     draw_info_overlay,
     draw_tracked_animal,
     draw_tracked_person,
@@ -96,7 +97,7 @@ class Config:
     counting_enabled: bool = False
     counting_line_start: Tuple[float, float] = (0.0, 0.5)
     counting_line_end: Tuple[float, float] = (1.0, 0.5)
-    counting_origin_direction: str = "in"
+    counting_in_direction_point: Tuple[float, float] = (0.5, 0.25)
     counting_cleanup_max_age: int = 150
     zmq_publish_port: int = 5555
 
@@ -155,7 +156,8 @@ class Config:
         counting_line_end_str = env_vars.get("COUNTING_LINE_END", "1.0,0.5")
         counting_line_start = tuple(float(v) for v in counting_line_start_str.split(","))
         counting_line_end = tuple(float(v) for v in counting_line_end_str.split(","))
-        counting_origin_direction = env_vars.get("COUNTING_ORIGIN_DIRECTION", "in").lower()
+        counting_in_direction_point_str = env_vars.get("COUNTING_IN_DIRECTION_POINT", "0.5,0.25")
+        counting_in_direction_point = tuple(float(v) for v in counting_in_direction_point_str.split(","))
         counting_cleanup_max_age = int(env_vars.get("COUNTING_CLEANUP_MAX_AGE", "150"))
         zmq_publish_port = int(env_vars.get("ZMQ_PUBLISH_PORT", "5555"))
 
@@ -209,7 +211,7 @@ class Config:
             counting_enabled=counting_enabled,
             counting_line_start=counting_line_start,
             counting_line_end=counting_line_end,
-            counting_origin_direction=counting_origin_direction,
+            counting_in_direction_point=counting_in_direction_point,
             counting_cleanup_max_age=counting_cleanup_max_age,
             zmq_publish_port=zmq_publish_port,
             # Stranger alert from .env
@@ -372,7 +374,7 @@ class Pipeline:
             self.counter = ZoneCounter(
                 line_start=config.counting_line_start,
                 line_end=config.counting_line_end,
-                origin_direction=config.counting_origin_direction,
+                in_direction_point=config.counting_in_direction_point,
             )
             print(f"People counting: Enabled (line {config.counting_line_start} -> {config.counting_line_end})")
 
@@ -627,9 +629,11 @@ class Pipeline:
         queue_info = f"Q:{self.recognition_worker.queue_size}"
         frame = draw_info_overlay(frame, fps, len(tracked_persons), queue_info)
 
-        # 7. Draw counting line and info
+        # 7. Draw counting line, IN zone overlay, and info
         if self.counter is not None:
             pt1, pt2 = self.counter.get_line_points_px(frame.shape)
+            in_pt = self.counter.get_in_direction_point_px(frame.shape)
+            frame = draw_in_zone_overlay(frame, pt1, pt2, in_pt)
             frame = draw_counting_line(frame, pt1, pt2)
             in_count, out_count = self.counter.get_counts()
             frame = draw_counting_info(frame, in_count, out_count)

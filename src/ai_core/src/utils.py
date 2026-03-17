@@ -407,6 +407,56 @@ def format_time_ms(ms: float) -> str:
         return f"{ms / 1000:.1f}s"
 
 
+def _cross_sign_px(
+    line_start: Tuple[int, int],
+    line_end: Tuple[int, int],
+    point: Tuple[int, int],
+) -> int:
+    """Return +1 / -1 / 0 for which side of the line the point is on."""
+    dx = line_end[0] - line_start[0]
+    dy = line_end[1] - line_start[1]
+    px = point[0] - line_start[0]
+    py = point[1] - line_start[1]
+    cross = dx * py - dy * px
+    if cross > 0:
+        return 1
+    elif cross < 0:
+        return -1
+    return 0
+
+
+def draw_in_zone_overlay(
+    frame: np.ndarray,
+    pt1: Tuple[int, int],
+    pt2: Tuple[int, int],
+    in_point: Tuple[int, int],
+    color: Tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.15,
+) -> np.ndarray:
+    """Draw a semi-transparent overlay on the IN zone side of the counting line."""
+    h, w = frame.shape[:2]
+    in_sign = _cross_sign_px(pt1, pt2, in_point)
+    if in_sign == 0:
+        return frame
+
+    # Collect frame corners on the IN side
+    corners = [(0, 0), (w, 0), (w, h), (0, h)]
+    in_corners = [c for c in corners if _cross_sign_px(pt1, pt2, c) == in_sign]
+
+    # Build polygon: pt1 -> in-side corners (sorted by angle) -> pt2
+    # Sort corners clockwise around centroid of the polygon
+    all_pts = [pt1] + in_corners + [pt2]
+    cx = sum(p[0] for p in all_pts) / len(all_pts)
+    cy = sum(p[1] for p in all_pts) / len(all_pts)
+    import math
+    all_pts.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+
+    polygon = np.array(all_pts, dtype=np.int32)
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [polygon], color)
+    return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+
 def draw_counting_line(
     frame: np.ndarray,
     pt1: Tuple[int, int],
