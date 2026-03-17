@@ -28,6 +28,7 @@ case "$MODE" in
         
         echo "Restarting network-watchdog service..."
         systemctl restart network-watchdog
+        sleep 5
         echo "Network mode updated successfully."
         ;;
     *)

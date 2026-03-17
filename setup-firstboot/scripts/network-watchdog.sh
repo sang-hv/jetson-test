@@ -131,25 +131,25 @@ apply_routing() {
 
     case "$MODE" in
         4g)
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   100
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  500
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 600
+            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   50
+            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  700
+            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
             ;;
         lan)
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  100
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   200
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 600
+            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
+            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
+            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 800
             ;;
         wifi)
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 100
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   200
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  300
+            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 50
+            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   700
+            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  800
             ;;
         auto|*)
             # auto: LAN primary → WiFi → 4G
-            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  100
-            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 200
-            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   300
+            [ -n "$IFACE_LAN" ]  && set_metric "$IFACE_LAN"  50
+            [ -n "$IFACE_WIFI" ] && set_metric "$IFACE_WIFI" 60
+            [ -n "$IFACE_4G" ]   && set_metric "$IFACE_4G"   70
             ;;
     esac
 
@@ -168,15 +168,31 @@ set_metric() {
     local GW
     GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
     
+    # Cứu hộ khẩn cấp: Nếu thẻ mạng có IP nhưng bị DHCP ngầm xoá mất Default Gateway
+    if [ -z "$GW" ]; then
+        local IP
+        IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
+        if [ -n "$IP" ]; then
+            GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
+        fi
+    fi
+
+    # Chỉ xoá bỏ các metric phụ trợ do chính nhánh gán ra (tránh cắn lầm metric mặc định của NM: 100, 600)
+    for m in 50 60 70 100 200 300 500 600 700 800 900; do
+        ip route del default dev "$IFACE" metric $m 2>/dev/null || true
+    done
+    
+    # Với usb2 (4G), NM không quản lý, thỉnh thoảng sẽ bị đùn ra default route không có metric (metric 0)
+    if [ "${IFACE:0:3}" = "usb" ]; then
+         ip route del default dev "$IFACE" 2>/dev/null || true
+    fi
+
     if [ -n "$GW" ]; then
-        # Flush all default routes for this interface
-        ip route flush default dev "$IFACE" 2>/dev/null || true
         # Re-add purely with the known GW and new Metric
         ip route add default via "$GW" dev "$IFACE" metric "$METRIC" 2>/dev/null || true
     else
         # If it's a point-to-point without 'via' (like some wwan/usb setups)
         if ip route show dev "$IFACE" 2>/dev/null | grep -q "^default"; then
-            ip route flush default dev "$IFACE" 2>/dev/null || true
             ip route add default dev "$IFACE" metric "$METRIC" 2>/dev/null || true
         fi
     fi
