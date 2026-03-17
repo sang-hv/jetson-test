@@ -46,19 +46,19 @@ class ZoneCounter:
     """
     Counts people moving between zones defined by a dividing line.
 
-    The line splits the frame into two zones. `origin_direction` determines
-    which side of the line (the side containing the origin (0,0)) is "in" or "out".
+    The line splits the frame into two zones. `in_direction_point` is a point
+    that belongs to the IN zone, used to determine which side is IN vs OUT.
     """
 
     def __init__(
         self,
         line_start: Tuple[float, float],
         line_end: Tuple[float, float],
-        origin_direction: str = "in",
+        in_direction_point: Tuple[float, float] = (0.5, 0.25),
     ):
         self._line_start = line_start  # (x, y) as ratio 0.0-1.0
         self._line_end = line_end
-        self._origin_direction = origin_direction  # "in" or "out"
+        self._in_direction_point = in_direction_point
 
         # Per-track zone state
         self._track_first_zone: dict[int, str] = {}  # track_id -> "in"/"out"
@@ -72,10 +72,14 @@ class ZoneCounter:
         self._passerby_count = 0
         self._lock = threading.Lock()
 
-        # Pre-compute origin sign (which side of the line (0,0) is on)
-        self._origin_sign = self._cross_sign(
-            self._line_start, self._line_end, (0.0, 0.0)
+        # Pre-compute which side of the line the IN zone is on
+        self._in_sign = self._cross_sign(
+            self._line_start, self._line_end, in_direction_point
         )
+        if self._in_sign == 0:
+            raise ValueError(
+                f"in_direction_point {in_direction_point} lies on the counting line"
+            )
 
     @staticmethod
     def _cross_sign(
@@ -101,12 +105,8 @@ class ZoneCounter:
             self._line_start, self._line_end, (cx_ratio, cy_ratio)
         )
         if sign == 0:
-            # On the line — treat as same side as origin
-            sign = self._origin_sign
-        if sign == self._origin_sign:
-            return self._origin_direction  # origin side
-        else:
-            return "out" if self._origin_direction == "in" else "in"
+            sign = self._in_sign
+        return "in" if sign == self._in_sign else "out"
 
     def update(
         self,
@@ -239,6 +239,16 @@ class ZoneCounter:
         pt1 = (int(self._line_start[0] * w), int(self._line_start[1] * h))
         pt2 = (int(self._line_end[0] * w), int(self._line_end[1] * h))
         return pt1, pt2
+
+    def get_in_direction_point_px(
+        self, frame_shape: Tuple[int, ...]
+    ) -> Tuple[int, int]:
+        """Convert in_direction_point from ratio coordinates to pixel coordinates."""
+        h, w = frame_shape[:2]
+        return (
+            int(self._in_direction_point[0] * w),
+            int(self._in_direction_point[1] * h),
+        )
 
 
 @dataclass
