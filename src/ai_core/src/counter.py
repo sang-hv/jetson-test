@@ -29,7 +29,8 @@ class CrossingEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
-    crop: Optional[np.ndarray] = None
+    frame: Optional[np.ndarray] = None
+    bbox: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -39,7 +40,8 @@ class PasserbyEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
-    crop: Optional[np.ndarray] = None
+    frame: Optional[np.ndarray] = None
+    bbox: Optional[np.ndarray] = None
 
 
 class ZoneCounter:
@@ -65,8 +67,9 @@ class ZoneCounter:
         self._track_last_zone: dict[int, str] = {}   # track_id -> "in"/"out"
         self._track_last_seen: dict[int, int] = {}   # track_id -> frame_number
         self._track_person_info: dict[int, dict] = {}  # track_id -> {person_id, age, gender}
-        self._track_best_crop: dict[int, np.ndarray] = {}  # track_id -> best quality crop
-        self._track_best_score: dict[int, float] = {}  # track_id -> best crop score
+        self._track_best_frame: dict[int, np.ndarray] = {}  # track_id -> best quality full frame
+        self._track_best_bbox: dict[int, np.ndarray] = {}  # track_id -> bbox of best frame
+        self._track_best_score: dict[int, float] = {}  # track_id -> best score
 
         self._in_count = 0
         self._out_count = 0
@@ -112,10 +115,9 @@ class ZoneCounter:
     def update(
         self,
         tracked_persons: List[TrackedPerson],
-        frame_shape: Tuple[int, ...],
+        frame: np.ndarray,
         frame_number: int,
         track_infos: Optional[Dict[int, dict]] = None,
-        track_crops: Optional[Dict[int, np.ndarray]] = None,
         track_scores: Optional[Dict[int, float]] = None,
     ) -> None:
         """
@@ -124,8 +126,10 @@ class ZoneCounter:
         Records first_zone on first appearance and continuously updates last_zone.
         Also caches person info (label, age, gender) so it's available when the
         track is lost (TrackManager may have already cleaned it up by then).
+        When a better quality score is found, stores a copy of the full frame
+        and the corresponding bbox for later saving with drawn bounding box.
         """
-        h, w = frame_shape[:2]
+        h, w = frame.shape[:2]
 
         with self._lock:
             for person in tracked_persons:
@@ -145,10 +149,11 @@ class ZoneCounter:
                 if track_infos and track_id in track_infos:
                     self._track_person_info[track_id] = track_infos[track_id]
 
-                if track_crops and track_id in track_crops:
-                    score = track_scores.get(track_id, 0.0) if track_scores else 0.0
+                if track_scores and track_id in track_scores:
+                    score = track_scores[track_id]
                     if score > self._track_best_score.get(track_id, -1.0):
-                        self._track_best_crop[track_id] = track_crops[track_id]
+                        self._track_best_frame[track_id] = frame.copy()
+                        self._track_best_bbox[track_id] = person.bbox.copy()
                         self._track_best_score[track_id] = score
 
     def process_lost_tracks(
@@ -183,7 +188,8 @@ class ZoneCounter:
                 last_zone = self._track_last_zone.get(tid)
                 info = self._track_person_info.get(tid, {})
 
-                crop = self._track_best_crop.get(tid)
+                best_frame = self._track_best_frame.get(tid)
+                best_bbox = self._track_best_bbox.get(tid)
 
                 if first_zone and last_zone and first_zone != last_zone:
                     if first_zone == "out" and last_zone == "in":
@@ -198,7 +204,8 @@ class ZoneCounter:
                         person_id=info.get("person_id", "Unknown"),
                         age=info.get("age"),
                         gender=info.get("gender"),
-                        crop=crop,
+                        frame=best_frame,
+                        bbox=best_bbox,
                     ))
                 elif first_zone == "out" and last_zone == "out":
                     pid = info.get("person_id", "Unknown")
@@ -209,7 +216,8 @@ class ZoneCounter:
                             person_id=pid,
                             age=info.get("age"),
                             gender=info.get("gender"),
-                            crop=crop,
+                            frame=best_frame,
+                            bbox=best_bbox,
                         ))
 
                 # Cleanup state for this track
@@ -217,7 +225,8 @@ class ZoneCounter:
                 self._track_last_zone.pop(tid, None)
                 self._track_last_seen.pop(tid, None)
                 self._track_person_info.pop(tid, None)
-                self._track_best_crop.pop(tid, None)
+                self._track_best_frame.pop(tid, None)
+                self._track_best_bbox.pop(tid, None)
                 self._track_best_score.pop(tid, None)
 
         return crossings, passerby_events
