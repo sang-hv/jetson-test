@@ -610,7 +610,6 @@ class Pipeline:
         # 2b. Update zone counter and process lost tracks
         if self.counter is not None:
             track_infos = {}
-            track_crops = {}
             track_scores = {}
             for person in tracked_persons:
                 tid = person.track_id
@@ -620,11 +619,8 @@ class Pipeline:
                     "age": age,
                     "gender": gender,
                 }
-                crop = self._extract_person_crop(frame, person)
-                if crop is not None:
-                    track_crops[tid] = crop
-                    track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
-            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos, track_crops, track_scores)
+                track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
+            self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
             crossings, passerby_events = self.counter.process_lost_tracks(
                 active_ids, self._frame_count, self.config.counting_cleanup_max_age
             )
@@ -649,7 +645,9 @@ class Pipeline:
                         stranger_in_zone[tid] = info
                 alerts = self.stranger_alert_manager.update(stranger_in_zone)
                 if alerts and self.zmq_publisher is not None:
-                    self._publish_stranger_alerts(alerts, track_crops)
+                    # Build bbox lookup for stranger alert saving
+                    track_bboxes = {p.track_id: p.bbox for p in tracked_persons}
+                    self._publish_stranger_alerts(alerts, frame, track_bboxes)
 
         # 3. Submit recognition tasks (non-blocking)
         for person in tracked_persons:
@@ -732,9 +730,9 @@ class Pipeline:
         detections = []
         for event in crossings:
             detection_result = None
-            if event.crop is not None:
-                detection_result = self.detection_saver.save_crop(
-                    event.crop, "crossing", event.track_id, event.person_id,
+            if event.frame is not None and event.bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    event.frame, event.bbox, "crossing", event.track_id, event.person_id,
                 )
             detections.append({
                 "track_id": event.track_id,
@@ -753,9 +751,9 @@ class Pipeline:
         detections = []
         for event in events:
             detection_result = None
-            if event.crop is not None:
-                detection_result = self.detection_saver.save_crop(
-                    event.crop, "passerby", event.track_id, event.person_id,
+            if event.frame is not None and event.bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    event.frame, event.bbox, "passerby", event.track_id, event.person_id,
                 )
             detections.append({
                 "track_id": event.track_id,
@@ -782,16 +780,16 @@ class Pipeline:
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_animal_alert(payload)
 
-    def _publish_stranger_alerts(self, alerts, track_crops=None) -> None:
+    def _publish_stranger_alerts(self, alerts, frame=None, track_bboxes=None) -> None:
         """Build ZMQ payload from stranger alert events and publish."""
         import time as _time
         detections = []
         for alert in alerts:
             detection_result = None
-            crop = track_crops.get(alert.track_id) if track_crops else None
-            if crop is not None:
-                detection_result = self.detection_saver.save_crop(
-                    crop, "stranger_alert", alert.track_id, alert.person_id,
+            bbox = track_bboxes.get(alert.track_id) if track_bboxes else None
+            if frame is not None and bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    frame, bbox, "stranger_alert", alert.track_id, alert.person_id,
                 )
             detections.append({
                 "track_id": alert.track_id,
