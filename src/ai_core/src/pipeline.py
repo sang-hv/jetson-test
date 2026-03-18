@@ -26,6 +26,7 @@ from .recognizer import FaceRecognizer
 from .tracker import TrackManager
 from .utils import (
     FPSCounter,
+    compute_crop_score,
     crop_with_padding,
     draw_counting_info,
     draw_counting_line,
@@ -554,6 +555,7 @@ class Pipeline:
         if self.counter is not None:
             track_infos = {}
             track_crops = {}
+            track_scores = {}
             for person in tracked_persons:
                 tid = person.track_id
                 age, gender = self.track_manager.get_age_gender(tid)
@@ -565,7 +567,8 @@ class Pipeline:
                 crop = self._extract_person_crop(frame, person)
                 if crop is not None:
                     track_crops[tid] = crop
-            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos, track_crops)
+                    track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
+            self.counter.update(tracked_persons, frame.shape, self._frame_count, track_infos, track_crops, track_scores)
             crossings, passerby_events = self.counter.process_lost_tracks(
                 active_ids, self._frame_count, self.config.counting_cleanup_max_age
             )

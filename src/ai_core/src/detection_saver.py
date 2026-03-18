@@ -22,16 +22,16 @@ class DetectionImageSaver:
     ) -> str:
         """Save a cropped image and return the absolute file path.
 
-        Naming: {base_dir}/{event_type}/{YYYY-MM-DD}/{HHMMSS_ffffff}_{track_id}_{person_id}.jpg
+        Naming: {base_dir}/{event_type}/{YYYY-MM-DD}/{HHMMSS_ffffff}_{track_id}_{person_id}.webp
         """
         now = datetime.now()
         date_dir = now.strftime("%Y-%m-%d")
         safe_person_id = person_id.replace("/", "_").replace("\\", "_").replace("?", "")
-        filename = f"{now.strftime('%H%M%S_%f')}_{track_id}_{safe_person_id}.jpg"
+        filename = f"{now.strftime('%H%M%S_%f')}_{track_id}_{safe_person_id}.webp"
 
         dir_path = os.path.join(self._base_dir, event_type, date_dir)
         os.makedirs(dir_path, exist_ok=True)
 
         file_path = os.path.join(dir_path, filename)
-        cv2.imwrite(file_path, crop)
+        cv2.imwrite(file_path, crop, [cv2.IMWRITE_WEBP_QUALITY, 80])
         return file_path
