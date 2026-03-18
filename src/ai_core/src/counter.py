@@ -70,6 +70,7 @@ class ZoneCounter:
         self._track_best_frame: dict[int, np.ndarray] = {}  # track_id -> best quality full frame
         self._track_best_bbox: dict[int, np.ndarray] = {}  # track_id -> bbox of best frame
         self._track_best_score: dict[int, float] = {}  # track_id -> best score
+        self._track_ever_in: dict[int, bool] = {}  # track_id -> ever been in "in" zone
 
         self._in_count = 0
         self._out_count = 0
@@ -145,6 +146,10 @@ class ZoneCounter:
 
                 self._track_last_zone[track_id] = zone
                 self._track_last_seen[track_id] = frame_number
+                if zone == "in":
+                    self._track_ever_in[track_id] = True
+                elif track_id not in self._track_ever_in:
+                    self._track_ever_in[track_id] = False
 
                 if track_infos and track_id in track_infos:
                     self._track_person_info[track_id] = track_infos[track_id]
@@ -207,7 +212,7 @@ class ZoneCounter:
                         frame=best_frame,
                         bbox=best_bbox,
                     ))
-                elif first_zone == "out" and last_zone == "out":
+                elif first_zone == "out" and last_zone == "out" and not self._track_ever_in.get(tid, False):
                     pid = info.get("person_id", "Unknown")
                     if pid == "Unknown" or pid.endswith("?"):
                         self._passerby_count += 1
@@ -228,6 +233,7 @@ class ZoneCounter:
                 self._track_best_frame.pop(tid, None)
                 self._track_best_bbox.pop(tid, None)
                 self._track_best_score.pop(tid, None)
+                self._track_ever_in.pop(tid, None)
 
         return crossings, passerby_events
 
@@ -282,6 +288,10 @@ class _StrangerAlertState:
     track_id: int
     last_alert_time: float
     alert_count: int = 0
+    alerted: bool = False
+    person_id: str = "Unknown"
+    age: Optional[int] = None
+    gender: Optional[str] = None
 
 
 class StrangerAlertManager:
@@ -317,27 +327,56 @@ class StrangerAlertManager:
             # Remove tracks no longer in the stranger set (left zone or recognized)
             stale = [tid for tid in self._tracked_strangers if tid not in stranger_in_zone]
             for tid in stale:
+                state = self._tracked_strangers[tid]
+                if not state.alerted:
+                    # Stranger disappeared before grace period expired — fire alert now
+                    alerts.append(StrangerAlertEvent(
+                        track_id=tid,
+                        person_id=state.person_id,
+                        age=state.age,
+                        gender=state.gender,
+                        alert_count=1,
+                    ))
                 del self._tracked_strangers[tid]
 
             for tid, info in stranger_in_zone.items():
                 if tid not in self._tracked_strangers:
-                    # New stranger in IN zone — check grace period
                     created_at = info.get("created_at", now)
-                    if now - created_at < self._grace_period:
-                        continue  # Still within grace period, skip
+                    in_grace = now - created_at < self._grace_period
                     self._tracked_strangers[tid] = _StrangerAlertState(
-                        track_id=tid, last_alert_time=now, alert_count=1,
-                    )
-                    alerts.append(StrangerAlertEvent(
                         track_id=tid,
+                        last_alert_time=now,
+                        alert_count=0 if in_grace else 1,
+                        alerted=not in_grace,
                         person_id=info.get("person_id", "Unknown"),
                         age=info.get("age"),
                         gender=info.get("gender"),
-                        alert_count=1,
-                    ))
+                    )
+                    if not in_grace:
+                        alerts.append(StrangerAlertEvent(
+                            track_id=tid,
+                            person_id=info.get("person_id", "Unknown"),
+                            age=info.get("age"),
+                            gender=info.get("gender"),
+                            alert_count=1,
+                        ))
                 else:
                     state = self._tracked_strangers[tid]
-                    if now - state.last_alert_time >= self._alert_interval:
+                    if not state.alerted:
+                        # Still in grace period — check if it has now expired
+                        created_at = info.get("created_at", now)
+                        if now - created_at >= self._grace_period:
+                            state.alerted = True
+                            state.alert_count = 1
+                            state.last_alert_time = now
+                            alerts.append(StrangerAlertEvent(
+                                track_id=tid,
+                                person_id=info.get("person_id", "Unknown"),
+                                age=info.get("age"),
+                                gender=info.get("gender"),
+                                alert_count=1,
+                            ))
+                    elif now - state.last_alert_time >= self._alert_interval:
                         state.last_alert_time = now
                         state.alert_count += 1
                         alerts.append(StrangerAlertEvent(
