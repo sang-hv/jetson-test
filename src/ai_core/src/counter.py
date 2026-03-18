@@ -65,7 +65,8 @@ class ZoneCounter:
         self._track_last_zone: dict[int, str] = {}   # track_id -> "in"/"out"
         self._track_last_seen: dict[int, int] = {}   # track_id -> frame_number
         self._track_person_info: dict[int, dict] = {}  # track_id -> {person_id, age, gender}
-        self._track_last_crop: dict[int, np.ndarray] = {}  # track_id -> last known crop
+        self._track_best_crop: dict[int, np.ndarray] = {}  # track_id -> best quality crop
+        self._track_best_score: dict[int, float] = {}  # track_id -> best crop score
 
         self._in_count = 0
         self._out_count = 0
@@ -115,6 +116,7 @@ class ZoneCounter:
         frame_number: int,
         track_infos: Optional[Dict[int, dict]] = None,
         track_crops: Optional[Dict[int, np.ndarray]] = None,
+        track_scores: Optional[Dict[int, float]] = None,
     ) -> None:
         """
         Update zone tracking for current frame's tracked persons.
@@ -144,7 +146,10 @@ class ZoneCounter:
                     self._track_person_info[track_id] = track_infos[track_id]
 
                 if track_crops and track_id in track_crops:
-                    self._track_last_crop[track_id] = track_crops[track_id]
+                    score = track_scores.get(track_id, 0.0) if track_scores else 0.0
+                    if score > self._track_best_score.get(track_id, -1.0):
+                        self._track_best_crop[track_id] = track_crops[track_id]
+                        self._track_best_score[track_id] = score
 
     def process_lost_tracks(
         self,
@@ -178,7 +183,7 @@ class ZoneCounter:
                 last_zone = self._track_last_zone.get(tid)
                 info = self._track_person_info.get(tid, {})
 
-                crop = self._track_last_crop.get(tid)
+                crop = self._track_best_crop.get(tid)
 
                 if first_zone and last_zone and first_zone != last_zone:
                     if first_zone == "out" and last_zone == "in":
@@ -212,7 +217,8 @@ class ZoneCounter:
                 self._track_last_zone.pop(tid, None)
                 self._track_last_seen.pop(tid, None)
                 self._track_person_info.pop(tid, None)
-                self._track_last_crop.pop(tid, None)
+                self._track_best_crop.pop(tid, None)
+                self._track_best_score.pop(tid, None)
 
         return crossings, passerby_events
 

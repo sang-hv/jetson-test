@@ -367,6 +367,38 @@ def draw_info_overlay(
     return frame
 
 
+def compute_crop_score(
+    bbox: np.ndarray,
+    frame_shape: tuple,
+    edge_margin: float = 0.02,
+) -> float:
+    """Score a person bbox for crop quality (higher = better).
+
+    Considers bbox area and penalizes bboxes near frame edges.
+    """
+    h, w = frame_shape[:2]
+    x1, y1, x2, y2 = bbox[:4].astype(float)
+
+    box_area = max(0.0, (x2 - x1) * (y2 - y1))
+
+    margin_x = w * edge_margin
+    margin_y = h * edge_margin
+
+    left_dist = min(max(x1, 0.0), margin_x)
+    top_dist = min(max(y1, 0.0), margin_y)
+    right_dist = min(max(w - x2, 0.0), margin_x)
+    bottom_dist = min(max(h - y2, 0.0), margin_y)
+
+    visibility = (
+        (left_dist / margin_x)
+        * (top_dist / margin_y)
+        * (right_dist / margin_x)
+        * (bottom_dist / margin_y)
+    )
+
+    return box_area * visibility
+
+
 def crop_with_padding(
     image: np.ndarray,
     bbox: np.ndarray,
