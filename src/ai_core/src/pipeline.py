@@ -30,6 +30,7 @@ from .utils import (
     crop_with_padding,
     draw_counting_info,
     draw_counting_line,
+    draw_detection_zone,
     draw_in_zone_overlay,
     draw_info_overlay,
     draw_tracked_animal,
@@ -128,6 +129,11 @@ class Config:
     # Detection image saving directory
     detection_image_dir: str = "detection"
 
+    # Detection zone: restrict YOLO inference to this rectangle (normalized coords)
+    # Loaded from DB (detection_zones, code='detection')
+    # None = use full frame
+    detection_zone: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
+
     @classmethod
     def from_args(cls, args) -> Config:
         """
@@ -160,17 +166,36 @@ class Config:
         counting_cleanup_max_age = int(env_vars.get("COUNTING_CLEANUP_MAX_AGE", "150"))
         zmq_publish_port = int(env_vars.get("ZMQ_PUBLISH_PORT", "5555"))
 
-        # Load counting line from DB (detection_zones where code='entry_exit')
-        if counting_enabled:
-            import json as _json
-            import sqlite3 as _sqlite3
-            _db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
-            try:
-                _conn = _sqlite3.connect(_db_path)
+        # Load detection zones from DB
+        import json as _json
+        import sqlite3 as _sqlite3
+        _db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
+        detection_zone: Optional[Tuple[float, float, float, float]] = None
+
+        try:
+            _conn = _sqlite3.connect(_db_path)
+
+            # Load detection zone (restrict YOLO inference area)
+            _det_row = _conn.execute(
+                "SELECT coordinates FROM detection_zones WHERE code = 'detection' LIMIT 1"
+            ).fetchone()
+            if _det_row:
+                _coords = _json.loads(_det_row[0])
+                if len(_coords) >= 4:
+                    _xs = [float(pt["x"]) for pt in _coords]
+                    _ys = [float(pt["y"]) for pt in _coords]
+                    detection_zone = (min(_xs), min(_ys), max(_xs), max(_ys))
+                    print(f"[Config] Detection zone loaded: {detection_zone}")
+                else:
+                    print("Warning: detection zone needs 4 corner points")
+            else:
+                print("[Config] No detection zone found in DB, using full frame")
+
+            # Load counting line (entry_exit zone)
+            if counting_enabled:
                 _row = _conn.execute(
                     "SELECT coordinates, in_direction_point FROM detection_zones WHERE code = 'entry_exit' LIMIT 1"
                 ).fetchone()
-                _conn.close()
                 if _row:
                     _coords = _json.loads(_row[0])
                     _in_pt = _json.loads(_row[1]) if _row[1] else None
@@ -182,8 +207,10 @@ class Config:
                         print("Warning: entry_exit needs 2 line points and in_direction_point")
                 else:
                     print("Warning: No entry_exit detection zone found in DB, using defaults")
-            except Exception as e:
-                print(f"Warning: Failed to load entry_exit zone from DB: {e}")
+
+            _conn.close()
+        except Exception as e:
+            print(f"Warning: Failed to load detection zones from DB: {e}")
 
         # Parse stranger alert settings from .env
         stranger_alert_enabled = env_vars.get("STRANGER_ALERT_ENABLED", "false").lower() == "true"
@@ -257,6 +284,8 @@ class Config:
             zmq_recv_timeout_ms=zmq_recv_timeout_ms,
             # Detection image saving
             detection_image_dir=detection_image_dir,
+            # Detection zone from DB
+            detection_zone=detection_zone,
         )
 
         # Optimize for CPU inference
@@ -323,6 +352,7 @@ class Pipeline:
         print(f"PPE detection (helmet/glove): {'Enabled' if config.ppe_detection_enabled else 'Disabled'}")
         print(f"People counting: {'Enabled' if config.counting_enabled else 'Disabled'}")
         print(f"Animal detection: {'Enabled' if config.animal_detection_enabled else 'Disabled'}")
+        print(f"Detection zone: {'Active' if config.detection_zone else 'Full frame'}")
         print("-" * 60)
 
         # Map tracker type to config file
@@ -546,7 +576,33 @@ class Pipeline:
         self._frame_count += 1
 
         # 1. Detect and track persons (and animals if enabled)
-        tracked_persons, tracked_animals = self.detector.detect_and_track(frame)
+        # If a detection zone is configured, crop frame to that region for YOLO
+        detect_frame = frame
+        zone_offset_x, zone_offset_y = 0, 0
+        if self.config.detection_zone is not None:
+            h, w = frame.shape[:2]
+            min_x, min_y, max_x, max_y = self.config.detection_zone
+            zx1 = int(min_x * w)
+            zy1 = int(min_y * h)
+            zx2 = int(max_x * w)
+            zy2 = int(max_y * h)
+            detect_frame = frame[zy1:zy2, zx1:zx2]
+            zone_offset_x, zone_offset_y = zx1, zy1
+
+        tracked_persons, tracked_animals = self.detector.detect_and_track(detect_frame)
+
+        # Remap bboxes from crop space back to full-frame coordinates
+        if zone_offset_x or zone_offset_y:
+            for p in tracked_persons:
+                p.bbox[0] += zone_offset_x
+                p.bbox[1] += zone_offset_y
+                p.bbox[2] += zone_offset_x
+                p.bbox[3] += zone_offset_y
+            for a in tracked_animals:
+                a.bbox[0] += zone_offset_x
+                a.bbox[1] += zone_offset_y
+                a.bbox[2] += zone_offset_x
+                a.bbox[3] += zone_offset_y
 
         # 2. Get active track IDs for cleanup
         active_ids = [p.track_id for p in tracked_persons]
@@ -663,6 +719,10 @@ class Pipeline:
             frame = draw_counting_line(frame, pt1, pt2)
             in_count, out_count = self.counter.get_counts()
             frame = draw_counting_info(frame, in_count, out_count)
+
+        # 8. Draw detection zone boundary
+        if self.config.detection_zone is not None:
+            frame = draw_detection_zone(frame, self.config.detection_zone)
 
         return frame
 
