@@ -46,6 +46,7 @@ ZMQ_TOPIC = b"crossing_event"
 ZMQ_STRANGER_TOPIC = b"stranger_alert"
 ZMQ_PASSERBY_TOPIC = b"passerby_event"
 ZMQ_ANIMAL_TOPIC = b"animal_alert"
+ZMQ_PERSON_COUNT_TOPIC = b"person_count"
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
 _zmq_task: asyncio.Task | None = None
@@ -65,7 +66,8 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_STRANGER_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PASSERBY_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ANIMAL_TOPIC)
-    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}]")
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PERSON_COUNT_TOPIC)
+    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}]")
 
     try:
         while True:
@@ -89,6 +91,10 @@ async def _zmq_subscriber_loop() -> None:
                 elif topic == ZMQ_ANIMAL_TOPIC:
                     payload = AnimalAlertPayload.model_validate_json(raw)
                     result = await process_animal_alert(payload, db)
+                elif topic == ZMQ_PERSON_COUNT_TOPIC:
+                    data = json.loads(raw)
+                    logger.info(f"Person count changed: {data.get('person_count')}")
+                    continue
                 else:
                     logger.warning(f"Unknown ZMQ topic: {topic}")
                     continue
