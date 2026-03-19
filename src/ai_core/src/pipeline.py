@@ -413,12 +413,10 @@ class Pipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
-        # Initialize ZMQ publisher if any feature needs it
-        self.zmq_publisher = None
-        needs_zmq = config.counting_enabled or config.animal_detection_enabled
-        if needs_zmq:
-            from .zmq_publisher import ZMQPublisher
-            self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+        # Initialize ZMQ publisher (always needed for person count updates)
+        from .zmq_publisher import ZMQPublisher
+        self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+        self._prev_person_count: int = -1  # Track person count changes
 
         # Initialize line crossing counter if enabled
         self.counter = None
@@ -706,8 +704,18 @@ class Pipeline:
 
         # 6. Draw info overlay with queue size
         fps = self.fps_counter.update()
+        current_person_count = len(tracked_persons)
         queue_info = f"Q:{self.recognition_worker.queue_size}"
-        frame = draw_info_overlay(frame, fps, len(tracked_persons), queue_info)
+        frame = draw_info_overlay(frame, fps, current_person_count, queue_info)
+
+        # 6b. Publish person count change via ZMQ
+        if current_person_count != self._prev_person_count:
+            import time as _time
+            self.zmq_publisher.send_person_count({
+                "timestamp": _time.time(),
+                "person_count": current_person_count,
+            })
+            self._prev_person_count = current_person_count
 
         # 7. Draw counting line, IN zone overlay, and info
         if self.counter is not None:
