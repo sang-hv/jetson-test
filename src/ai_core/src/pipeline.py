@@ -695,7 +695,8 @@ class Pipeline:
         if self.animal_alert_manager is not None and tracked_animals:
             alerts = self.animal_alert_manager.update(tracked_animals)
             if alerts and self.zmq_publisher is not None:
-                self._publish_animal_alerts(alerts)
+                animal_bboxes = {a.track_id: a.bbox for a in tracked_animals}
+                self._publish_animal_alerts(alerts, frame, animal_bboxes)
             for animal in tracked_animals:
                 frame = draw_tracked_animal(frame, animal)
 
@@ -773,17 +774,24 @@ class Pipeline:
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_passerby_event(payload)
 
-    def _publish_animal_alerts(self, alerts) -> None:
+    def _publish_animal_alerts(self, alerts, frame=None, track_bboxes=None) -> None:
         """Build ZMQ payload from animal alert events and publish."""
         import time as _time
         detections = []
         for alert in alerts:
+            detection_result = None
+            bbox = track_bboxes.get(alert.track_id) if track_bboxes else None
+            if frame is not None and bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    frame, bbox, "animal_alert", alert.track_id, alert.class_name,
+                )
             detections.append({
                 "track_id": alert.track_id,
                 "class_id": alert.class_id,
                 "class_name": alert.class_name,
                 "confidence": alert.confidence,
                 "alert_count": alert.alert_count,
+                "detection_result": detection_result,
             })
         payload = {"timestamp": _time.time(), "detections": detections}
         self.zmq_publisher.send_animal_alert(payload)
