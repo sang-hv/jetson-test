@@ -1,0 +1,21 @@
+[Unit]
+Description=Person count WebSocket (ZMQ person_count → browser via nginx /detections)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=/opt/person_count_ws
+ExecStart=/bin/bash /opt/person_count_ws/start.sh
+Restart=always
+RestartSec=5
+
+Environment=PYTHONUNBUFFERED=1
+# Same default as logic_service ZMQ_SUB_ADDRESS
+Environment=ZMQ_SUB_ADDRESS=tcp://127.0.0.1:5555
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

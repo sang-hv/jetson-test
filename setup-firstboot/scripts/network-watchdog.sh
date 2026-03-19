@@ -105,15 +105,31 @@ get_iface_4g() {
 }
 
 get_iface_lan() {
-    for candidate in eth0 enp3s0 eno1 enx$(cat /sys/class/net/eth0/address 2>/dev/null | tr -d ':'); do
+    # Jetson / ARM: Ethernet thường là enP*p*s* (PCIe, chữ P HOA) hoặc end0 — không khớp enp thường.
+    local addr_hex
+    if [ -r /sys/class/net/eth0/address ]; then
+        addr_hex=$(tr -d ':' </sys/class/net/eth0/address 2>/dev/null)
+    fi
+    for candidate in eth0 end0 end1 enp3s0 eno1 \
+        enP1p1s0 enP2p1s0 enP3p1s0 enP4p1s0 enP8p1s0; do
         if ip link show "$candidate" &>/dev/null 2>&1; then
             echo "$candidate"
             return 0
         fi
     done
-    # Generic: first wired interface not lo/usb*/ww*
+    if [ -n "$addr_hex" ]; then
+        local enx="enx${addr_hex}"
+        if ip link show "$enx" &>/dev/null 2>&1; then
+            echo "$enx"
+            return 0
+        fi
+    fi
+    # Generic: wired — eth*, enp*, enP*, eno*, enx*, end*; loại trừ WiFi/4G/docker
     local IFACE
-    IFACE=$(ls /sys/class/net 2>/dev/null | grep -E '^(eth|enp|eno|enx)' | head -1)
+    IFACE=$(ls /sys/class/net 2>/dev/null \
+        | grep -Ev '^(lo|docker|veth|br-|bond|virbr|wlan|wlp|wlx|wlP|wwan|wwp|wg|tun|tap|can|usb[0-9])' \
+        | grep -E '^(eth|enp|enP|eno|enx|end)' \
+        | head -1)
     [ -n "$IFACE" ] && echo "$IFACE" || return 1
 }
 

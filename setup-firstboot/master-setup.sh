@@ -319,6 +319,21 @@ systemctl daemon-reload
 systemctl enable backchannel.service
 log "Backchannel server → /opt/backchannel/"
 
+# Person count WebSocket (ZMQ topic person_count → nginx /detections)
+mkdir -p /opt/person_count_ws
+cp "$SCRIPT_DIR/person_count_ws/server.py" /opt/person_count_ws/server.py
+cp "$SCRIPT_DIR/person_count_ws/start.sh" /opt/person_count_ws/start.sh
+cp "$SCRIPT_DIR/person_count_ws/demo.html" /opt/person_count_ws/demo.html
+chmod +x /opt/person_count_ws/start.sh
+
+pip3 install pyzmq 2>&1 | tail -2 | tee -a "$LOG_FILE"
+
+sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/person-count-ws.service" \
+    > /etc/systemd/system/person-count-ws.service
+systemctl daemon-reload
+systemctl enable person-count-ws.service
+log "Person count WebSocket → /opt/person_count_ws/ (systemd: person-count-ws)"
+
 ###############################################################################
 # STEP 10: Nginx reverse proxy
 ###############################################################################
@@ -424,7 +439,7 @@ echo "    nginx:       $(nginx -v 2>&1)" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # Verify services are enabled
-for svc in go2rtc backchannel cloudflared nginx ModemManager sim7600-4g network-watchdog; do
+for svc in go2rtc backchannel person-count-ws cloudflared nginx ModemManager sim7600-4g network-watchdog; do
     if systemctl is-enabled "$svc" >/dev/null 2>&1; then
         log "Service $svc: enabled ✓"
     else
@@ -450,6 +465,7 @@ echo ""
 echo "  Services:"
 echo "    go2rtc          → sudo systemctl status go2rtc"
 echo "    backchannel     → sudo systemctl status backchannel"
+echo "    person-count-ws → sudo systemctl status person-count-ws"
 echo "    cloudflared     → sudo systemctl status cloudflared"
 echo "    nginx           → sudo systemctl status nginx"
 echo "    audio-auto      → systemctl --user status audio-autostart"
