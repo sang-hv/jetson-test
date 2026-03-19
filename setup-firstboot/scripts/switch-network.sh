@@ -63,7 +63,10 @@ if [ "$SIGNALLED" -eq 0 ]; then
 fi
 
 # --- Step 3: Wait and verify the route actually changed ---
+# 4G modem thường cần thêm thời gian; watchdog chỉ chuyển default khi ping 8.8.8.8 OK.
 MAX_WAIT=15
+[ "$MODE" = "4g" ] && MAX_WAIT=45
+
 WAITED=0
 VERIFIED=0
 
@@ -109,6 +112,10 @@ else
     FINAL_DEV=$(get_current_route_dev)
     if [ "$FINAL_DEV" != "$BEFORE_DEV" ]; then
         log "SUCCESS after retry: $BEFORE_DEV → $FINAL_DEV"
+    elif [ "$MODE" = "4g" ]; then
+        log "MODE=4g is saved; route still on '$FINAL_DEV' until 4G can ping $PING_HOST (by design — avoids SSH drop)."
+        log "Check: journalctl -u network-watchdog -n 20  &&  ip addr show usb0"
+        exit 0
     else
         err "FAILED: Route still on '$FINAL_DEV'. Debug with:"
         err "  ip route show default"

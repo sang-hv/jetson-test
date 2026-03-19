@@ -85,16 +85,26 @@ load_config() {
 # Detect available interfaces
 # ---------------------------------------------------------------------------
 get_iface_4g() {
-    # Check cached value first
+    # Cache chỉ tin khi interface còn tồn tại VÀ đã có IPv4 (tránh usb2 DOWN nhưng vẫn cache).
     if [ -f "$IFACE_4G_CACHE" ]; then
         local CACHED
-        CACHED=$(cat "$IFACE_4G_CACHE")
-        if ip link show "$CACHED" &>/dev/null; then
-            echo "$CACHED"
-            return 0
+        CACHED=$(tr -d ' \n' <"$IFACE_4G_CACHE")
+        if [ -n "$CACHED" ] && ip link show "$CACHED" &>/dev/null; then
+            if iface_has_ip "$CACHED"; then
+                echo "$CACHED"
+                return 0
+            fi
         fi
     fi
-    # Auto-detect
+    # Ưu tiên usb/wwan đã có IP (đúng bearer data, tránh nhầm cổng USB khác).
+    local candidate
+    for candidate in usb0 usb1 usb2 wwan0 wwp0s21u1i4 wwan0u1i4; do
+        if ip link show "$candidate" &>/dev/null && iface_has_ip "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    # Bootstrap: chưa có IP — lấy interface tồn tại đầu tiên
     for candidate in usb0 usb1 usb2 wwan0 wwp0s21u1i4 wwan0u1i4; do
         if ip link show "$candidate" &>/dev/null; then
             echo "$candidate"
@@ -385,27 +395,22 @@ main() {
             NETWORK_MODE="$FORCED_MODE"
         fi
 
-        # SIGHUP/SIGUSR1 → force re-apply even if mode hasn't changed
+        # SIGHUP/SIGUSR1: chỉ reload config — KHÔNG ép route trước khi ping OK (tránh mất SSH khi 4G chưa sẵn sàng).
         if [ "$RELOAD_REQUESTED" -eq 1 ]; then
-            log "Reload requested — forcing routing re-apply for mode '$NETWORK_MODE'"
+            log "Reload requested — will re-apply routes only after connectivity check (mode=$NETWORK_MODE)"
             RELOAD_REQUESTED=0
-            apply_routing "$NETWORK_MODE" ""
-            LAST_MODE="$NETWORK_MODE"
             FAIL_COUNT=0
-            sleep 2
-            continue
         fi
 
         if [ "$NETWORK_MODE" != "$LAST_MODE" ]; then
             log "Network mode changed: '$LAST_MODE' → '$NETWORK_MODE'"
-            apply_routing "$NETWORK_MODE" ""
             LAST_MODE="$NETWORK_MODE"
             FAIL_COUNT=0
         fi
-        # Chọn interface đang thực sự có mạng theo thứ tự ưu tiên
+
+        # Luôn chọn interface đã ping được $PING_HOST rồi mới apply_routing — tránh switch 4g làm rớt session ngay.
         ACTIVE_IFACE=$(check_connectivity "$NETWORK_MODE")
-        if [ $? -eq 0 ]; then
-            # Áp dụng routing: ép ACTIVE_IFACE thành default route (metric thấp nhất)
+        if [ $? -eq 0 ] && [ -n "$ACTIVE_IFACE" ]; then
             apply_routing "$NETWORK_MODE" "$ACTIVE_IFACE"
             if [ $FAIL_COUNT -gt 0 ]; then
                 log "Connectivity restored (was down for ${FAIL_COUNT} checks)"
@@ -413,13 +418,19 @@ main() {
             FAIL_COUNT=0
         else
             FAIL_COUNT=$((FAIL_COUNT + 1))
-            warn "Connectivity check failed (attempt $FAIL_COUNT/$MAX_RETRIES)"
+            warn "Connectivity check failed (attempt $FAIL_COUNT/$MAX_RETRIES) — not switching default route blindly"
 
             if [ $FAIL_COUNT -ge "$MAX_RETRIES" ]; then
                 err "Network down after $MAX_RETRIES checks — triggering self-heal"
                 heal_4g
                 sleep 5
-                apply_routing "$NETWORK_MODE" ""
+                ACTIVE_IFACE=$(check_connectivity "$NETWORK_MODE")
+                if [ $? -eq 0 ] && [ -n "$ACTIVE_IFACE" ]; then
+                    apply_routing "$NETWORK_MODE" "$ACTIVE_IFACE"
+                else
+                    warn "Still no path to $PING_HOST after heal — apply mode defaults (may recover when link comes up)"
+                    apply_routing "$NETWORK_MODE" ""
+                fi
                 FAIL_COUNT=0
             fi
         fi
