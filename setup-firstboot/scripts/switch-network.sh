@@ -46,20 +46,46 @@ else
     echo "NETWORK_MODE=$MODE" >> "$CONF_FILE"
 fi
 
-# --- Step 2: Signal the running watchdog to reload (SIGHUP) ---
+# --- Step 2: Áp config qua systemd (ổn định sau reboot, không phụ thuộc PID file) ---
 SIGNALLED=0
-if [ -f "$PIDFILE" ]; then
-    WD_PID=$(cat "$PIDFILE")
-    if kill -0 "$WD_PID" 2>/dev/null; then
-        log "Signalling watchdog (PID $WD_PID) to reload..."
-        kill -HUP "$WD_PID"
+if systemctl is-active --quiet network-watchdog 2>/dev/null; then
+    # ExecReload = kill -HUP $MAINPID — không cần /run/network-watchdog.pid
+    if systemctl reload network-watchdog 2>/dev/null; then
+        log "Reloaded network-watchdog (SIGHUP via systemd)."
         SIGNALLED=1
+    else
+        log "reload failed, trying HUP via PID file..."
+        if [ -f "$PIDFILE" ]; then
+            WD_PID=$(tr -d ' \n' <"$PIDFILE")
+            if [ -n "$WD_PID" ] && kill -HUP "$WD_PID" 2>/dev/null; then
+                SIGNALLED=1
+            fi
+        fi
     fi
 fi
 
 if [ "$SIGNALLED" -eq 0 ]; then
-    log "Watchdog not running — restarting service..."
-    systemctl restart network-watchdog 2>/dev/null || true
+    # inactive/failed: start (không restart — tránh kill process đang khởi động)
+    log "network-watchdog inactive — starting service (may wait for dependencies)..."
+    if systemctl start network-watchdog 2>/dev/null; then
+        # Chờ active ngắn (tránh race PID file ngay sau ExecStart)
+        _sw_wait=0
+        while [ "$_sw_wait" -lt 20 ]; do
+            systemctl is-active --quiet network-watchdog && break
+            sleep 0.3
+            _sw_wait=$((_sw_wait + 1))
+        done
+        if systemctl is-active --quiet network-watchdog; then
+            systemctl reload network-watchdog 2>/dev/null || true
+            log "network-watchdog started and reloaded."
+            SIGNALLED=1
+        fi
+    fi
+fi
+
+if [ "$SIGNALLED" -eq 0 ]; then
+    err "Could not start or signal network-watchdog. Try: sudo systemctl status network-watchdog"
+    exit 1
 fi
 
 # --- Step 3: Wait and verify the route actually changed ---
@@ -102,11 +128,7 @@ else
     echo ""
     log "Attempting direct route fix..."
 
-    # Force one more reload + re-apply
-    if [ -f "$PIDFILE" ]; then
-        WD_PID=$(cat "$PIDFILE")
-        kill -HUP "$WD_PID" 2>/dev/null || true
-    fi
+    systemctl reload network-watchdog 2>/dev/null || true
     sleep 3
 
     FINAL_DEV=$(get_current_route_dev)
