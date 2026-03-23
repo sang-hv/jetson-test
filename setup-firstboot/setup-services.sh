@@ -86,7 +86,7 @@ cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
 chmod +x /opt/device/sync-config.py /opt/device/device-update.py
 log "sync-config + device-update deployed"
 
-SYNC_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/sync-config.py >> /var/log/sync-config.log 2>&1"
+SYNC_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/sync-config.py"
 if crontab -l 2>/dev/null | grep -q "sync-config.py"; then
     log "sync-config cronjob already exists"
 else
@@ -94,7 +94,7 @@ else
     log "sync-config cronjob installed"
 fi
 
-DEVICE_UPDATE_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/device-update.py >> /var/log/device-update.log 2>&1"
+DEVICE_UPDATE_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/device-update.py"
 if crontab -l 2>/dev/null | grep -q "device-update.py"; then
     log "device-update cronjob already exists"
 else
