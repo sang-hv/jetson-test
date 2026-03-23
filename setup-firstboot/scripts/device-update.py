@@ -3,7 +3,7 @@
 #  device-update.py - Update device last_seen to backend API
 #
 #  Runs as cronjob every 5 minutes.
-#  API: POST {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/device-update
+#  API: PATCH {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/device-update
 #
 #  Auth headers (HMAC SHA256):
 #    - X-Device-ID
@@ -48,7 +48,7 @@ def load_env(path: Path) -> dict[str, str]:
     return env
 
 
-def post_device_update(device_id: str, backend_url: str, secret_key: str) -> bool:
+def patch_device_update(device_id: str, backend_url: str, secret_key: str) -> bool:
     """Call device-update endpoint to refresh last_seen."""
     ts = str(int(time.time()))
     sig = hmac.new(
@@ -58,6 +58,14 @@ def post_device_update(device_id: str, backend_url: str, secret_key: str) -> boo
     ).hexdigest()
 
     url = f"{backend_url}/api/v1/cameras/{device_id}/device-update"
+    # Use RFC3339/ISO8601 UTC timestamp with `Z` suffix.
+    last_seen = (
+        datetime.utcnow()
+        .replace(microsecond=0)
+        .isoformat(timespec="seconds")
+        + "Z"
+    )
+    payload = {"last_seen": last_seen}
     result = subprocess.run(
         [
             "curl",
@@ -74,6 +82,8 @@ def post_device_update(device_id: str, backend_url: str, secret_key: str) -> boo
             f"X-Signature: {sig}",
             "-H",
             "Content-Type: application/json",
+            "-d",
+            json.dumps(payload),
             "--connect-timeout",
             "10",
             "--max-time",
@@ -128,7 +138,7 @@ def main() -> int:
             err(f"{var_name} not set in {DEVICE_ENV}")
             return 1
 
-    ok = post_device_update(device_id, backend_url, secret_key)
+    ok = patch_device_update(device_id, backend_url, secret_key)
     if ok:
         log("last_seen updated")
         return 0
