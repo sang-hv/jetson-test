@@ -8,6 +8,10 @@ User=__USER__
 Group=audio
 NotifyAccess=main
 
+# Recycle the pipeline periodically to avoid long-run issues (e.g. nvargus-daemon
+# memory leaks) even when the AI watchdog doesn't consider the stream "stalled".
+RuntimeMaxSec=4h
+
 # Reset GPU/camera before start (frees leaked memory from previous runs)
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
