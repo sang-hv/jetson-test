@@ -22,11 +22,9 @@ jetson-nano-setup-final/
 ├── backchannel/
 │   ├── server.py                ← WebSocket audio server (FFmpeg→pacat)
 │   ├── start.sh                 ← PulseAudio wrapper
-│   └── demo.html                ← Browser test page
 ├── person_count_ws/
 │   ├── server.py                ← WebSocket person count (ZMQ SUB)
 │   ├── start.sh                 ← Exec wrapper (port 8090)
-│   └── demo.html                ← Test page → ws …/detections
 └── README.md
 ```
 
@@ -55,7 +53,7 @@ sudo reboot
 |---------|------|-----------|
 | go2rtc | 1984 | Video/Audio streaming |
 | backchannel | 8080 | Audio từ client → speaker |
-| person-count-ws | 8090 | ZMQ `person_count` → WebSocket (nginx: `/detections`, demo: `/person-count/demo.html`) |
+| person-count-ws | 8090 | ZMQ `person_count` → WebSocket (nginx: `/detections`) |
 | nginx | 80 | Reverse proxy |
 | cloudflared | - | Cloudflare tunnel |
 | audio-autostart | - | Auto PulseAudio + echo cancel |
