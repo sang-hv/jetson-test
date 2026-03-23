@@ -65,7 +65,7 @@ def post_device_update(device_id: str, backend_url: str, secret_key: str) -> boo
             "-w",
             "\n%{http_code}",
             "-X",
-            "POST",
+            "PATCH",
             "-H",
             f"X-Device-ID: {device_id}",
             "-H",

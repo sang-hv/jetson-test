@@ -105,6 +105,9 @@ fi
 if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     log "Running first config sync..."
     python3 /opt/device/sync-config.py 2>&1 | tee -a "$LOG_FILE" || warn "First sync failed (cron will retry)"
+
+    log "Running first update device info..."
+    python3 /opt/device/device-update.py 2>&1 | tee -a "$LOG_FILE" || warn "First update device failed (cron will retry)"
 fi
 
 step "Phase 3/7: cloudflared service check"
