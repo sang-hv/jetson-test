@@ -243,38 +243,104 @@ db.commit()
 
 # --- 1. Face embeddings (API 2 — paginated) ---
 face_api_base = f"{BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/face-embeddings"
+FACE_EMBEDDINGS_UPDATED_AT_KEYS = [
+    # Key name as requested (note: "emabedd" is kept for backward compatibility)
+    "face_emabedd_updated_at",
+    # Common corrected spelling (in case it was used somewhere else)
+    "face_embedding_updated_at",
+]
+
+# Read stored updated_at from camera_settings (prefer the requested key first)
+stored_face_embeddings_updated_at = ""
+for _key in FACE_EMBEDDINGS_UPDATED_AT_KEYS:
+    row = db.execute(
+        "SELECT value FROM camera_settings WHERE key = ?",
+        (_key,),
+    ).fetchone()
+    if row and row[0]:
+        stored_face_embeddings_updated_at = str(row[0])
+        break
+
 page = 1
 per_page = 50
-all_face_data: dict[str, list] = {}
 
-while True:
-    face_url = f"{face_api_base}?page={page}&per_page={per_page}"
-    face_resp = call_api(face_url, f"faces p{page}")
-    if not face_resp:
-        warn("Face embeddings API failed — skipping")
-        break
+face_url = f"{face_api_base}?page={page}&per_page={per_page}"
+face_resp = call_api(face_url, f"faces p{page}")
+if not face_resp:
+    warn("Face embeddings API (page=1) failed — skipping face embeddings sync")
+else:
+    face_updated_at = face_resp.get("updated_at") or ""
+    should_sync = True
+    if (
+        stored_face_embeddings_updated_at
+        and face_updated_at
+        and stored_face_embeddings_updated_at == face_updated_at
+    ):
+        should_sync = False
 
-    page_embeddings: dict = face_resp.get("face_embeddings", {})
-    for user_id, vectors in page_embeddings.items():
-        all_face_data.setdefault(user_id, []).extend(vectors)
+    if not should_sync:
+        log(
+            "Face embeddings up-to-date "
+            f"(updated_at={face_updated_at}) — skipping sync"
+        )
+    else:
+        all_face_data: dict[str, list] = {}
+        api_ok = True
 
-    total_pages = face_resp.get("total_pages", 1)
-    if page >= total_pages:
-        break
-    page += 1
+        # Page 1 already fetched
+        page_embeddings: dict = face_resp.get("face_embeddings", {})
+        for user_id, vectors in page_embeddings.items():
+            all_face_data.setdefault(user_id, []).extend(vectors)
 
-if all_face_data:
-    db.execute("DELETE FROM face_embeddings")
-    count = 0
-    for user_id, vectors in all_face_data.items():
-        for vector in vectors:
-            db.execute(
-                "INSERT INTO face_embeddings (user_id, vector) VALUES (?, ?)",
-                (user_id, json.dumps(vector)),
-            )
-            count += 1
-    db.commit()
-    log(f"Face embeddings saved → {count} vectors for {len(all_face_data)} users ({page} pages)")
+        total_pages = face_resp.get("total_pages", 1) or 1
+        while page < total_pages:
+            page += 1
+            face_url = f"{face_api_base}?page={page}&per_page={per_page}"
+            face_resp = call_api(face_url, f"faces p{page}")
+            if not face_resp:
+                warn("Face embeddings API failed during pagination — skipping sync")
+                api_ok = False
+                break
+
+            page_embeddings = face_resp.get("face_embeddings", {})
+            for user_id, vectors in page_embeddings.items():
+                all_face_data.setdefault(user_id, []).extend(vectors)
+
+        if api_ok:
+            try:
+                db.execute("BEGIN;")
+
+                # Store updated_at before syncing embeddings (single transaction)
+                if face_updated_at:
+                    for _key in FACE_EMBEDDINGS_UPDATED_AT_KEYS:
+                        db.execute(
+                            "INSERT OR REPLACE INTO camera_settings (key, value) VALUES (?, ?)",
+                            (_key, face_updated_at),
+                        )
+                else:
+                    warn(
+                        "Face embeddings updated_at missing from API response; "
+                        "will sync embeddings without updating camera_settings"
+                    )
+
+                db.execute("DELETE FROM face_embeddings")
+                count = 0
+                for user_id, vectors in all_face_data.items():
+                    for vector in vectors:
+                        db.execute(
+                            "INSERT INTO face_embeddings (user_id, vector) VALUES (?, ?)",
+                            (user_id, json.dumps(vector)),
+                        )
+                        count += 1
+
+                db.commit()
+                log(
+                    f"Face embeddings saved → {count} vectors for "
+                    f"{len(all_face_data)} users ({page} pages)"
+                )
+            except Exception as e:
+                db.rollback()
+                err(f"Failed to sync face embeddings: {e}")
 
 # --- 2. Camera settings (upsert) ---
 settings_map = {
