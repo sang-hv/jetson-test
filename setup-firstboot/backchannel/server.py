@@ -178,6 +178,13 @@ class BackchannelServer:
         self.pacat: Optional[subprocess.Popen] = None
         self.count = 0
 
+        # If the decode/playback pipeline fails repeatedly, exit the process so
+        # systemd can restart the service and run ExecStartPre (audio autostart).
+        # Without this, the websocket handler may keep receiving chunks but the
+        # audio pipeline can get stuck silently.
+        self._consecutive_pipeline_failures = 0
+        self._max_consecutive_pipeline_failures = 6
+
     def start_pipeline(self, client: str, fmt: str) -> bool:
         """Start audio pipeline. PCMU→pacat direct, WebM→FFmpeg→pacat."""
         try:
@@ -226,9 +233,19 @@ class BackchannelServer:
                 log.info(f"[{client}] WebM/Opus FFmpeg→pacat "
                          f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid})")
 
+            # Reset failure counter only after successful pipeline start
+            self._consecutive_pipeline_failures = 0
             return True
         except Exception as e:
             log.error(f"[{client}] Pipeline failed: {e}")
+            self._consecutive_pipeline_failures += 1
+            if self._consecutive_pipeline_failures >= self._max_consecutive_pipeline_failures:
+                log.error(
+                    "Too many consecutive audio pipeline failures (%d >= %d) — exiting",
+                    self._consecutive_pipeline_failures,
+                    self._max_consecutive_pipeline_failures,
+                )
+                sys.exit(1)
             return False
 
     def stop_pipeline(self):
@@ -322,6 +339,14 @@ class BackchannelServer:
                 # Restart if ffmpeg crashed
                 if self.process.poll() is not None:
                     log.warning(f"[{client}] FFmpeg exited ({self.process.returncode}), restarting")
+                    self._consecutive_pipeline_failures += 1
+                    if self._consecutive_pipeline_failures >= self._max_consecutive_pipeline_failures:
+                        log.error(
+                            "Too many consecutive audio pipeline failures (%d >= %d) — exiting",
+                            self._consecutive_pipeline_failures,
+                            self._max_consecutive_pipeline_failures,
+                        )
+                        sys.exit(1)
                     self.stop_pipeline()
                     await asyncio.sleep(0.1)
                     if fmt == 'webm':
@@ -341,6 +366,14 @@ class BackchannelServer:
                         log.info(f"[{client}] [{fmt}] chunk#{self.count} len={len(msg)}")
                 except BrokenPipeError:
                     log.warning(f"[{client}] Pipe broken, restarting")
+                    self._consecutive_pipeline_failures += 1
+                    if self._consecutive_pipeline_failures >= self._max_consecutive_pipeline_failures:
+                        log.error(
+                            "Too many consecutive audio pipeline failures (%d >= %d) — exiting",
+                            self._consecutive_pipeline_failures,
+                            self._max_consecutive_pipeline_failures,
+                        )
+                        sys.exit(1)
                     self.stop_pipeline()
                     await asyncio.sleep(0.1)
                     if not self.start_pipeline(client, fmt):
