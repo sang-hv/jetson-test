@@ -118,12 +118,10 @@ step "Phase 4/7: backchannel and person-count ws"
 mkdir -p /opt/backchannel /opt/person_count_ws
 cp "$SCRIPT_DIR/backchannel/server.py" /opt/backchannel/server.py
 cp "$SCRIPT_DIR/backchannel/start.sh" /opt/backchannel/start.sh
-cp "$SCRIPT_DIR/backchannel/demo.html" /opt/backchannel/demo.html
 chmod +x /opt/backchannel/start.sh
 
 cp "$SCRIPT_DIR/person_count_ws/server.py" /opt/person_count_ws/server.py
 cp "$SCRIPT_DIR/person_count_ws/start.sh" /opt/person_count_ws/start.sh
-cp "$SCRIPT_DIR/person_count_ws/demo.html" /opt/person_count_ws/demo.html
 chmod +x /opt/person_count_ws/start.sh
 
 pip3 install websockets pyzmq 2>&1 | tail -3 | tee -a "$LOG_FILE"
