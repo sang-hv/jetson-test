@@ -166,7 +166,7 @@ def main() -> int:
 
     # Import here to avoid slow import if validation fails
     try:
-        from src.pipeline import Config, Pipeline
+        from src.pipeline import Config, create_pipeline
     except ImportError as e:
         print(f"ERROR: Failed to import modules: {e}")
         print("\nEnsure dependencies are installed:")
@@ -177,8 +177,8 @@ def main() -> int:
         # Create configuration
         config = Config.from_args(args)
 
-        # Create and run pipeline
-        pipeline = Pipeline(config)
+        # Create and run pipeline (home or shop based on PIPELINE_TYPE)
+        pipeline = create_pipeline(config)
         pipeline.run()
 
         return 0
