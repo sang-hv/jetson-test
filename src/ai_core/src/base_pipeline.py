@@ -174,6 +174,7 @@ class BasePipeline:
         print(f"Age/Gender detection: {'Enabled' if config.age_gender_enabled else 'Disabled'}")
         print(f"PPE detection (helmet/glove): {'Enabled' if config.ppe_detection_enabled else 'Disabled'}")
         print(f"Detection zone: {'Active' if config.detection_zone else 'Full frame'}")
+        print(f"Display window: {'Enabled' if config.display_enabled else 'Disabled (headless)'}")
         print("-" * 60)
 
     # ------------------------------------------------------------------
@@ -422,10 +423,17 @@ class BasePipeline:
         cap = self._open_video_source()
 
         if not cap.isOpened():
-            self.recognition_worker.stop()
-            raise RuntimeError(f"Failed to open video source: {self.config.source}")
+            # SHM source may start before writer exists; read() handles auto-reconnect.
+            if self.config.video_source_type == "shm":
+                print("[Pipeline] SHM source not attached yet, waiting for writer...")
+            else:
+                self.recognition_worker.stop()
+                raise RuntimeError(f"Failed to open video source: {self.config.source}")
 
-        print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        if self.config.display_enabled:
+            print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        else:
+            print("\n[Pipeline] Running in headless mode (no OpenCV window)\n")
 
         frame_count = 0
         try:
@@ -448,18 +456,19 @@ class BasePipeline:
                 # Process frame (detection in main thread, recognition in worker)
                 annotated_frame = self._process_frame(frame)
 
-                # Display
-                cv2.imshow("Face Recognition", annotated_frame)
+                if self.config.display_enabled:
+                    # Display
+                    cv2.imshow("Face Recognition", annotated_frame)
 
-                # Handle keyboard events
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
-                    print("[Pipeline] Quit requested")
-                    break
-                elif key == ord("r"):
-                    print("\n[Pipeline] Refreshing face database...")
-                    self._load_known_faces(force_refresh=True)
-                    print("[Pipeline] Database refreshed\n")
+                    # Handle keyboard events
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        print("[Pipeline] Quit requested")
+                        break
+                    elif key == ord("r"):
+                        print("\n[Pipeline] Refreshing face database...")
+                        self._load_known_faces(force_refresh=True)
+                        print("[Pipeline] Database refreshed\n")
 
         except KeyboardInterrupt:
             print("\n[Pipeline] Interrupted by user")
@@ -467,7 +476,8 @@ class BasePipeline:
         finally:
             self.recognition_worker.stop()
             cap.release()
-            cv2.destroyAllWindows()
+            if self.config.display_enabled:
+                cv2.destroyAllWindows()
             if self.zmq_publisher is not None:
                 self.zmq_publisher.close()
             print(f"[Pipeline] Stopped after {frame_count} frames")

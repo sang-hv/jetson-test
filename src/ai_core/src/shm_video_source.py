@@ -51,7 +51,12 @@ class SharedMemoryVideoSource:
         self._total_frames: int = 0
         self._last_connect_attempt: float = 0.0
         self._reconnect_interval_sec: float = 0.5
-        self._connect()
+        if not self._connect():
+            logger.warning(
+                "SharedMemoryVideoSource initial attach failed (%s). "
+                "Will keep retrying in read().",
+                self._shm_name,
+            )
 
     def _close_shm(self) -> None:
         if self._shm is not None:
@@ -173,7 +178,8 @@ class SharedMemoryVideoSource:
         return False, None
 
     def isOpened(self) -> bool:
-        return not self._closed and self._shm is not None
+        # For SHM source we allow startup before writer exists; read() will auto-reconnect.
+        return not self._closed
 
     def release(self) -> None:
         if self._closed:

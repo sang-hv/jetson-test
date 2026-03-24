@@ -105,6 +105,8 @@ class Config:
 
     # Detection image saving directory
     detection_image_dir: str = "detection"
+    # Show OpenCV GUI window (set false for SSH/headless runtime)
+    display_enabled: bool = True
 
     # Detection zone: restrict YOLO inference to this rectangle (normalized coords)
     # Loaded from DB (detection_zones, code='detection')
@@ -217,6 +219,7 @@ class Config:
 
         # Parse detection image directory from .env
         detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")
+        display_enabled = env_vars.get("DISPLAY_ENABLED", "true").lower() == "true"
 
         # Parse pipeline type from .env
         pipeline_type = env_vars.get("PIPELINE_TYPE", "home").lower()
@@ -269,6 +272,7 @@ class Config:
             shm_video_name=shm_video_name,
             # Detection image saving
             detection_image_dir=detection_image_dir,
+            display_enabled=display_enabled,
             # Detection zone from DB
             detection_zone=detection_zone,
             # Pipeline type from .env
