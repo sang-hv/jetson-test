@@ -39,7 +39,7 @@ AI_HEIGHT = 1080
 AI_MAX_FPS = 5   # 3fps is enough for AI detection
 
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
-JPEG_QUALITY = 85  # higher quality for photo capture
+JPEG_QUALITY = 100  # higher quality for photo capture
 
 # Health watchdog: if no frame produced for this many seconds, pipeline is stalled → exit
 HEALTH_TIMEOUT_SEC = 30
