@@ -49,22 +49,33 @@ class SharedMemoryVideoSource:
         self._frame_height: int = 0
         self._frame_fps: float = 0.0
         self._total_frames: int = 0
+        self._last_connect_attempt: float = 0.0
+        self._reconnect_interval_sec: float = 0.5
         self._connect()
 
-    def _connect(self) -> None:
+    def _close_shm(self) -> None:
+        if self._shm is not None:
+            try:
+                self._shm.close()
+            except Exception:
+                pass
+            self._shm = None
+
+    def _connect(self) -> bool:
         from multiprocessing import shared_memory
 
+        self._last_connect_attempt = time.monotonic()
+        self._close_shm()
         try:
             self._shm = shared_memory.SharedMemory(name=self._shm_name, create=False)
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                f"Shared memory {self._shm_name!r} not found. "
-                "Start camera-stream (start-stream.py) before ai_core."
-            ) from e
+        except FileNotFoundError:
+            self._shm = None
+            return False
 
         if len(self._shm.buf) < HEADER_SIZE:
-            self._shm.close()
-            raise RuntimeError(f"Shared memory too small: {len(self._shm.buf)}")
+            logger.warning("Shared memory too small: %d", len(self._shm.buf))
+            self._close_shm()
+            return False
 
         if bytes(self._shm.buf[0:4]) != MAGIC:
             logger.warning(
@@ -77,6 +88,18 @@ class SharedMemoryVideoSource:
             self._shm_name,
             len(self._shm.buf),
         )
+        # Writer may restart and reset seq; allow new frames to be consumed.
+        self._last_seq = -1
+        return True
+
+    def _maybe_reconnect(self) -> None:
+        if self._closed:
+            return
+        now = time.monotonic()
+        if now - self._last_connect_attempt < self._reconnect_interval_sec:
+            return
+        if self._connect():
+            logger.info("SharedMemoryVideoSource reconnected to %s", self._shm_name)
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
@@ -86,17 +109,36 @@ class SharedMemoryVideoSource:
             (True, bgr_frame) on success.
             (False, None) on timeout or closed.
         """
-        if self._closed or self._shm is None:
+        if self._closed:
             return False, None
 
         deadline = time.monotonic() + (self._recv_timeout_ms / 1000.0)
         while time.monotonic() < deadline:
-            seq = struct.unpack_from("<Q", self._shm.buf, 24)[0]
+            if self._shm is None:
+                self._maybe_reconnect()
+                time.sleep(0.001)
+                continue
+
+            try:
+                seq = struct.unpack_from("<Q", self._shm.buf, 24)[0]
+            except Exception:
+                # Writer may have restarted/unlinked while reading.
+                self._close_shm()
+                self._maybe_reconnect()
+                time.sleep(0.001)
+                continue
+
             if seq != self._last_seq and seq > 0:
-                w = struct.unpack_from("<I", self._shm.buf, 8)[0]
-                h = struct.unpack_from("<I", self._shm.buf, 12)[0]
-                stride = struct.unpack_from("<I", self._shm.buf, 16)[0]
-                slot = struct.unpack_from("<I", self._shm.buf, 32)[0]
+                try:
+                    w = struct.unpack_from("<I", self._shm.buf, 8)[0]
+                    h = struct.unpack_from("<I", self._shm.buf, 12)[0]
+                    stride = struct.unpack_from("<I", self._shm.buf, 16)[0]
+                    slot = struct.unpack_from("<I", self._shm.buf, 32)[0]
+                except Exception:
+                    self._close_shm()
+                    self._maybe_reconnect()
+                    time.sleep(0.001)
+                    continue
                 if w <= 0 or h <= 0 or stride < w * 3:
                     time.sleep(0.001)
                     continue
@@ -126,6 +168,8 @@ class SharedMemoryVideoSource:
 
             time.sleep(0.0005)
 
+        # No new frame within timeout; try reconnect to catch writer restart.
+        self._maybe_reconnect()
         return False, None
 
     def isOpened(self) -> bool:
@@ -135,12 +179,7 @@ class SharedMemoryVideoSource:
         if self._closed:
             return
         self._closed = True
-        if self._shm is not None:
-            try:
-                self._shm.close()
-            except Exception:
-                pass
-            self._shm = None
+        self._close_shm()
         logger.info(
             "SharedMemoryVideoSource released (frames=%d)",
             self._total_frames,
