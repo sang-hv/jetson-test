@@ -19,7 +19,6 @@ import signal
 import sys
 import threading
 import time
-from typing import Optional
 
 import gi
 
@@ -29,22 +28,18 @@ from gi.repository import GLib, Gst
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-STREAM_WIDTH = 3280
-STREAM_HEIGHT = 2464
-STREAM_FPS = 20
+STREAM_WIDTH = 1920
+STREAM_HEIGHT = 1080
+STREAM_FPS = 30
 STREAM_BITRATE = 2000  # kbps — reduced to save RAM
 TCP_PORT = 8553
 
-# nvarguscamerasrc sensor-mode: set via STREAM_SENSOR_MODE env or --sensor-mode N.
-# None = omit property → Argus auto-negotiates (default for 1920x1080 etc.).
-# IMX219: mode 0 is often full-res e.g. 3280x2464 (max FPS often ~21; match STREAM_FPS).
-
-AI_WIDTH = 3280   # smaller = less memory, sufficient for detection
-AI_HEIGHT = 2464
+AI_WIDTH = 1920   # smaller = less memory, sufficient for detection
+AI_HEIGHT = 1080
 AI_MAX_FPS = 5   # 3fps is enough for AI detection
 
 ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
-JPEG_QUALITY = 85  # higher quality for photo capture
+JPEG_QUALITY = 100  # higher quality for photo capture
 
 # Health watchdog: if no frame produced for this many seconds, pipeline is stalled → exit
 HEALTH_TIMEOUT_SEC = 30
@@ -59,35 +54,6 @@ def log(msg: str) -> None:
 
 def err(msg: str) -> None:
     print(f"[stream] ERROR: {msg}", file=sys.stderr, flush=True)
-
-
-def resolve_sensor_mode(cli_value: Optional[int]) -> Optional[int]:
-    """
-    nvarguscamerasrc sensor-mode: CLI wins, then STREAM_SENSOR_MODE env.
-    Empty/unset env → None (auto).
-    """
-    if cli_value is not None:
-        return cli_value
-    raw = os.environ.get("STREAM_SENSOR_MODE", "").strip()
-    if not raw:
-        return None
-    try:
-        return int(raw, 10)
-    except ValueError:
-        log(f"WARNING: STREAM_SENSOR_MODE={raw!r} is not an integer — using auto")
-        return None
-
-
-def build_nvarguscamerasrc_element(sensor_mode: Optional[int]) -> str:
-    """First element of video pipeline; optional sensor-mode=N for IMX219 modes."""
-    parts = [
-        "nvarguscamerasrc",
-        "wbmode=1",
-        'ispdigitalgainrange="1 1"',
-    ]
-    if sensor_mode is not None:
-        parts.append(f"sensor-mode={sensor_mode}")
-    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -250,17 +216,12 @@ def has_echocancel() -> bool:
 # ---------------------------------------------------------------------------
 # Build pipeline
 # ---------------------------------------------------------------------------
-def build_pipeline(
-    with_audio: bool,
-    mode: str = "exec",
-    sensor_mode: Optional[int] = None,
-) -> Gst.Pipeline:
+def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     """Build GStreamer pipeline with tee for stream + AI."""
 
-    nvargus = build_nvarguscamerasrc_element(sensor_mode)
     # Video source (shared)
     video_src = (
-        f"{nvargus} ! "
+        f"nvarguscamerasrc wbmode=1 ispdigitalgainrange=\"1 1\" ! "
         f"video/x-raw(memory:NVMM),width={STREAM_WIDTH},height={STREAM_HEIGHT},"
         f"framerate={STREAM_FPS}/1 ! "
         f"nvvidconv ! video/x-raw,format=I420 ! "
@@ -333,23 +294,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["exec", "service"], default="exec",
                         help="exec: fdsink stdout (go2rtc), service: tcpserversink TCP")
-    parser.add_argument(
-        "--sensor-mode",
-        type=int,
-        default=None,
-        metavar="N",
-        help="nvarguscamerasrc sensor-mode (e.g. IMX219 mode 0 for 3280x2464). "
-        "If omitted, use STREAM_SENSOR_MODE env or Argus auto. Example: --sensor-mode 0",
-    )
     args = parser.parse_args()
 
     Gst.init(None)
     log(f"Mode: {args.mode}")
-    sensor_mode = resolve_sensor_mode(args.sensor_mode)
-    if sensor_mode is not None:
-        log(f"nvarguscamerasrc sensor-mode={sensor_mode} (fixed Argus mode)")
-    else:
-        log("nvarguscamerasrc sensor-mode: auto (driver negotiates)")
 
     # PulseAudio env — force-set using actual UID (%U in systemd resolves wrong)
     uid = os.getuid()
@@ -371,7 +319,7 @@ def main() -> int:
         log("AI frames: disabled (stream only mode)")
 
     # Build and start pipeline
-    pipeline = build_pipeline(with_audio, mode=args.mode, sensor_mode=sensor_mode)
+    pipeline = build_pipeline(with_audio, mode=args.mode)
     pipeline.set_state(Gst.State.PLAYING)
     log("Pipeline PLAYING")
 
