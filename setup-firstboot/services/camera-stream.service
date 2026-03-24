@@ -1,21 +1,43 @@
 [Unit]
 Description=Camera Stream Pipeline (CSI + AI + TCP)
 After=network.target sound.target pulseaudio.service nvargus-daemon.service
-Wants=audio-autostart.service
 
 [Service]
-Type=simple
+Type=notify
 User=__USER__
 Group=audio
+NotifyAccess=main
+
+# Recycle the pipeline periodically to avoid long-run issues (e.g. nvargus-daemon
+# memory leaks) even when the AI watchdog doesn't consider the stream "stalled".
+RuntimeMaxSec=4h
 
 # Reset GPU/camera before start (frees leaked memory from previous runs)
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
 
+# Reload PulseAudio echo-cancel AFTER pipeline starts (ExecStartPost runs in user session via su)
+# nvargus-daemon restart above disrupts PulseAudio → echo-cancel module becomes stale
+# Must reload AFTER pulsesrc connects, not before
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
+ExecStartPost=+/bin/bash -c '\
+  sleep 3; \
+  U=$(id -u __USER__); \
+  su - __USER__ -c "\
+    export XDG_RUNTIME_DIR=/run/user/$U \
+           DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus \
+           PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+    systemctl --user restart audio-autostart.service"'
 Restart=always
 RestartSec=5
+
+# Systemd watchdog: if no WATCHDOG=1 ping within 60s, kill and restart
+# start-stream.py sends WATCHDOG=1 every 10s while frames are flowing
 WatchdogSec=60
+
+# OOM: prefer to kill camera-stream (score 500) before go2rtc (score -900)
+# When killed → Restart=always brings it back cleanly with nvargus reset above
+OOMScoreAdjust=500
 
 # Logging
 StandardOutput=journal

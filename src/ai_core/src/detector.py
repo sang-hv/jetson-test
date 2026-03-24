@@ -90,6 +90,7 @@ class PersonDetector:
         person_conf: float = 0.4,
         tracker_config: str = "bytetrack.yaml",
         animal_detection_enabled: bool = False,
+        animal_conf: float = 0.4,
     ):
         """
         Initialize the person detector.
@@ -108,6 +109,7 @@ class PersonDetector:
         self.person_conf = person_conf
         self.tracker_config = tracker_config
         self.animal_detection_enabled = animal_detection_enabled
+        self.animal_conf = animal_conf
 
         print(f"[Detector] Loading YOLO model: {model_name} on {device}")
         self.model = YOLO(model_name)
@@ -188,15 +190,17 @@ class PersonDetector:
                             )
                         )
                     elif cls_id in self.ANIMAL_CLASS_IDS:
-                        tracked_animals.append(
-                            TrackedAnimal(
-                                track_id=track_id,
-                                bbox=bbox,
-                                confidence=conf,
-                                class_id=cls_id,
-                                class_name=self.ANIMAL_CLASS_IDS[cls_id],
+                        # Apply separate (stricter) confidence for animals
+                        if conf >= self.animal_conf:
+                            tracked_animals.append(
+                                TrackedAnimal(
+                                    track_id=track_id,
+                                    bbox=bbox,
+                                    confidence=conf,
+                                    class_id=cls_id,
+                                    class_name=self.ANIMAL_CLASS_IDS[cls_id],
+                                )
                             )
-                        )
 
         return tracked_persons, tracked_animals
 

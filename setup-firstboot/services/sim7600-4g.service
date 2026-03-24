@@ -1,0 +1,32 @@
+[Unit]
+Description=SIM7600G-H 4G Modem Connection
+Documentation=https://www.waveshare.com/wiki/SIM7600G-H_4G_for_Jetson_Nano
+After=network-pre.target ModemManager.service
+Wants=ModemManager.service
+# Restart this service if ModemManager restarts
+PartOf=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Give USB device time to enumerate after boot
+ExecStartPre=/bin/sleep 5
+
+ExecStart=/opt/4g/setup-4g.sh
+ExecStop=/bin/bash -c 'IFACE=$(cat /run/4g-interface 2>/dev/null || echo usb0); ip link set $IFACE down 2>/dev/null; rm -f /run/4g-interface'
+
+# Self-restart on failure
+Restart=on-failure
+RestartSec=15
+# Don't restart infinitely — let watchdog handle persistent failures
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sim7600-4g
+
+[Install]
+WantedBy=multi-user.target

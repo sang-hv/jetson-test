@@ -594,6 +594,12 @@ class TrackManager:
         with self._lock:
             self.tracks.clear()
 
+    def get_track_created_at(self, track_id: int) -> Optional[float]:
+        """Return the creation timestamp of a track, or None if not found. Thread-safe."""
+        with self._lock:
+            track = self.tracks.get(track_id)
+            return track.created_at if track else None
+
     def is_priority_track(self, track_id: int) -> bool:
         """
         Check if track should be prioritized for recognition.

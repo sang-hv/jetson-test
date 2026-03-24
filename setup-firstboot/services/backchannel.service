@@ -1,12 +1,19 @@
 [Unit]
 Description=Audio Backchannel Server for go2rtc
-After=network.target sound.target pulseaudio.service
+After=network.target sound.target pulseaudio.service camera-stream.service
+# Restart backchannel when camera-stream restarts (camera-stream recreates echocancel_sink)
+BindsTo=camera-stream.service
 
 [Service]
 Type=simple
 User=__USER__
 Group=audio
 WorkingDirectory=/opt/backchannel
+# Avoid systemd rate-limiting preventing recovery when the audio pipeline
+# repeatedly fails and the service needs a restart.
+StartLimitIntervalSec=0
+# Safety net: ensure echocancel_sink exists before starting (in case camera-stream's ExecStartPre failed)
+ExecStartPre=/bin/bash -c 'U=$(id -u __USER__); export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; /opt/audio/setup-audio-autostart.sh'
 ExecStart=/bin/bash /opt/backchannel/start.sh
 Restart=always
 RestartSec=5

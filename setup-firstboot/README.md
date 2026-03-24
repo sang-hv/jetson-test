@@ -16,12 +16,15 @@ jetson-nano-setup-final/
 ├── services/
 │   ├── go2rtc.service           ← go2rtc systemd service
 │   ├── backchannel.service      ← Backchannel systemd service
+│   ├── person-count-ws.service  ← ZMQ person_count → WebSocket
 │   ├── cloudflared.service      ← Cloudflare tunnel service
 │   └── audio-autostart.service  ← Audio autostart user service
 ├── backchannel/
 │   ├── server.py                ← WebSocket audio server (FFmpeg→pacat)
 │   ├── start.sh                 ← PulseAudio wrapper
-│   └── demo.html                ← Browser test page
+├── person_count_ws/
+│   ├── server.py                ← WebSocket person count (ZMQ SUB)
+│   ├── start.sh                 ← Exec wrapper (port 8090)
 └── README.md
 ```
 
@@ -50,6 +53,7 @@ sudo reboot
 |---------|------|-----------|
 | go2rtc | 1984 | Video/Audio streaming |
 | backchannel | 8080 | Audio từ client → speaker |
+| person-count-ws | 8090 | ZMQ `person_count` → WebSocket (nginx: `/detections`) |
 | nginx | 80 | Reverse proxy |
 | cloudflared | - | Cloudflare tunnel |
 | audio-autostart | - | Auto PulseAudio + echo cancel |
@@ -58,7 +62,7 @@ sudo reboot
 
 ```bash
 # Services
-sudo systemctl status go2rtc backchannel nginx cloudflared
+sudo systemctl status go2rtc backchannel person-count-ws nginx cloudflared
 systemctl --user status audio-autostart
 
 # Audio
@@ -68,6 +72,7 @@ pactl list short sources | grep -i "jabra\|echocancel"
 # Logs
 sudo journalctl -u go2rtc -f
 sudo journalctl -u backchannel -f
+sudo journalctl -u person-count-ws -f
 ```
 
 ## Pipeline

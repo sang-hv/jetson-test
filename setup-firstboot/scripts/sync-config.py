@@ -4,11 +4,13 @@
 #
 #  Runs as cronjob every 5 minutes. Syncs:
 #    - Cloudflare tunnel token  → systemd service restart
-#    - Face embeddings          → SQLite face_embeddings table
 #    - Camera settings          → SQLite camera_settings table
 #    - AI rules                 → SQLite ai_rules table
+#    - Detection zones          → SQLite detection_zones table
+#    - Face embeddings          → SQLite face_embeddings table (API 2, paginated)
 #
-#  API: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config
+#  API 1: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config
+#  API 2: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/face-embeddings?page=N&per_page=50
 #
 #  Usage:
 #    sudo python3 /opt/device/sync-config.py
@@ -102,70 +104,75 @@ DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DB_DIR / "logic_service.db"
 
 # ---------------------------------------------------------------------------
-# Call backend API (HMAC signature — key never sent)
+# API helper (HMAC signature — key never sent)
 # Use curl to bypass Cloudflare TLS fingerprinting (urllib gets blocked)
+# ---------------------------------------------------------------------------
+
+
+def call_api(url: str, label: str = "API") -> dict:
+    """Call backend API with HMAC auth, return parsed data dict or exit on error."""
+    ts = str(int(time.time()))
+    sig = hmac.new(
+        SECRET_KEY.encode(),
+        f"{DEVICE_ID}|{ts}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    log(f"  [{label}] GET {url}")
+
+    result = subprocess.run(
+        [
+            "curl", "-s", "-w", "\n%{http_code}",
+            "-H", f"X-Device-ID: {DEVICE_ID}",
+            "-H", f"X-Timestamp: {ts}",
+            "-H", f"X-Signature: {sig}",
+            "-H", "Content-Type: application/json",
+            "--connect-timeout", "10",
+            "--max-time", "30",
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        err(f"[{label}] curl failed: {result.stderr}")
+        return {}
+
+    output_lines = result.stdout.rsplit("\n", 1)
+    raw_body = output_lines[0] if len(output_lines) > 1 else result.stdout
+    http_code = output_lines[1].strip() if len(output_lines) > 1 else "000"
+
+    log(f"  [{label}] HTTP: {http_code}")
+
+    if http_code != "200":
+        err(f"[{label}] HTTP {http_code}: {raw_body[:500]}")
+        return {}
+
+    try:
+        resp: dict = json.loads(raw_body)
+    except json.JSONDecodeError:
+        err(f"[{label}] Invalid JSON")
+        return {}
+
+    if not resp.get("success"):
+        err(f"[{label}] success=false: {resp.get('message', '')}")
+        return {}
+
+    return resp.get("data", {})
+
+
+# ---------------------------------------------------------------------------
+# API 1: Device config (settings, rules, detection zones)
 # ---------------------------------------------------------------------------
 log(f"Syncing from {BACKEND_URL} (device: {DEVICE_ID})")
 
 api_url = f"{BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config"
-timestamp = str(int(time.time()))
-signature = hmac.new(
-    SECRET_KEY.encode(),
-    f"{DEVICE_ID}|{timestamp}".encode(),
-    hashlib.sha256,
-).hexdigest()
-
-# Debug: log request details
-log(f"  URL:       GET {api_url}")
-log(f"  DEVICE_ID: {DEVICE_ID}")
-log(f"  TIMESTAMP: {timestamp}")
-log(f"  SECRET_KEY:{SECRET_KEY}")
-log(f"  SIGNATURE: {signature}")
-
-result = subprocess.run(
-    [
-        "curl", "-s", "-w", "\n%{http_code}",
-        "-H", f"X-Device-ID: {DEVICE_ID}",
-        "-H", f"X-Timestamp: {timestamp}",
-        "-H", f"X-Signature: {signature}",
-        "-H", "Content-Type: application/json",
-        "--connect-timeout", "10",
-        "--max-time", "30",
-        api_url,
-    ],
-    capture_output=True,
-    text=True,
-)
-
-if result.returncode != 0:
-    err(f"curl failed: {result.stderr}")
+data: dict = call_api(api_url, "config")
+if not data:
+    err("API 1 (config) failed — aborting")
     sys.exit(1)
-
-# Split body and HTTP status code
-output_lines = result.stdout.rsplit("\n", 1)
-raw_body = output_lines[0] if len(output_lines) > 1 else result.stdout
-http_code = output_lines[1].strip() if len(output_lines) > 1 else "000"
-
-log(f"  HTTP: {http_code}")
-
-if http_code != "200":
-    err(f"API returned HTTP {http_code}")
-    err(f"Response body: {raw_body[:500]}")
-    sys.exit(1)
-
-# Validate JSON
-try:
-    response: dict = json.loads(raw_body)
-except json.JSONDecodeError:
-    err("Invalid JSON response")
-    sys.exit(1)
-
-if not response.get("success"):
-    err(f"API returned success=false: {response.get('message', '')}")
-    sys.exit(1)
-
-data: dict = response.get("data", {})
-log("API response OK")
+log("API 1 (config) OK")
 
 # ---------------------------------------------------------------------------
 # Save previous config for diff (cloudflare token change detection)
@@ -173,9 +180,9 @@ log("API response OK")
 if CONFIG_FILE.exists():
     shutil.copy2(CONFIG_FILE, CONFIG_PREV)
 
-# Save minimal config for change detection
+# Save minimal config for change detection (normalize None → "")
 config_data = {
-    "cloudflare_tunnel_token": data.get("cloudflare_tunnel_token", ""),
+    "cloudflare_tunnel_token": data.get("cloudflare_tunnel_token") or "",
     "_last_synced": datetime.now().isoformat(),
 }
 CONFIG_FILE.write_text(json.dumps(config_data, indent=2))
@@ -223,22 +230,117 @@ db.execute("""
     )
 """)
 
+db.execute("""
+    CREATE TABLE IF NOT EXISTS detection_zones (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        code               TEXT NOT NULL,
+        coordinates        TEXT NOT NULL,
+        in_direction_point TEXT
+    )
+""")
+
 db.commit()
 
-# --- 1. Face embeddings (full replace) ---
-face_data: dict = data.get("face_embeddings", {})
-if face_data:
-    db.execute("DELETE FROM face_embeddings")
-    count = 0
-    for user_id, vectors in face_data.items():
-        for vector in vectors:
-            db.execute(
-                "INSERT INTO face_embeddings (user_id, vector) VALUES (?, ?)",
-                (user_id, json.dumps(vector)),
-            )
-            count += 1
-    db.commit()
-    log(f"Face embeddings saved → {count} vectors for {len(face_data)} users")
+# --- 1. Face embeddings (API 2 — paginated) ---
+face_api_base = f"{BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/face-embeddings"
+FACE_EMBEDDINGS_UPDATED_AT_KEYS = [
+    # Key name as requested (note: "emabedd" is kept for backward compatibility)
+    "face_emabedd_updated_at",
+    # Common corrected spelling (in case it was used somewhere else)
+    "face_embedding_updated_at",
+]
+
+# Read stored updated_at from camera_settings (prefer the requested key first)
+stored_face_embeddings_updated_at = ""
+for _key in FACE_EMBEDDINGS_UPDATED_AT_KEYS:
+    row = db.execute(
+        "SELECT value FROM camera_settings WHERE key = ?",
+        (_key,),
+    ).fetchone()
+    if row and row[0]:
+        stored_face_embeddings_updated_at = str(row[0])
+        break
+
+page = 1
+per_page = 50
+
+face_url = f"{face_api_base}?page={page}&per_page={per_page}"
+face_resp = call_api(face_url, f"faces p{page}")
+if not face_resp:
+    warn("Face embeddings API (page=1) failed — skipping face embeddings sync")
+else:
+    face_updated_at = face_resp.get("updated_at") or ""
+    should_sync = True
+    if (
+        stored_face_embeddings_updated_at
+        and face_updated_at
+        and stored_face_embeddings_updated_at == face_updated_at
+    ):
+        should_sync = False
+
+    if not should_sync:
+        log(
+            "Face embeddings up-to-date "
+            f"(updated_at={face_updated_at}) — skipping sync"
+        )
+    else:
+        all_face_data: dict[str, list] = {}
+        api_ok = True
+
+        # Page 1 already fetched
+        page_embeddings: dict = face_resp.get("face_embeddings", {})
+        for user_id, vectors in page_embeddings.items():
+            all_face_data.setdefault(user_id, []).extend(vectors)
+
+        total_pages = face_resp.get("total_pages", 1) or 1
+        while page < total_pages:
+            page += 1
+            face_url = f"{face_api_base}?page={page}&per_page={per_page}"
+            face_resp = call_api(face_url, f"faces p{page}")
+            if not face_resp:
+                warn("Face embeddings API failed during pagination — skipping sync")
+                api_ok = False
+                break
+
+            page_embeddings = face_resp.get("face_embeddings", {})
+            for user_id, vectors in page_embeddings.items():
+                all_face_data.setdefault(user_id, []).extend(vectors)
+
+        if api_ok:
+            try:
+                db.execute("BEGIN;")
+
+                # Store updated_at before syncing embeddings (single transaction)
+                if face_updated_at:
+                    for _key in FACE_EMBEDDINGS_UPDATED_AT_KEYS:
+                        db.execute(
+                            "INSERT OR REPLACE INTO camera_settings (key, value) VALUES (?, ?)",
+                            (_key, face_updated_at),
+                        )
+                else:
+                    warn(
+                        "Face embeddings updated_at missing from API response; "
+                        "will sync embeddings without updating camera_settings"
+                    )
+
+                db.execute("DELETE FROM face_embeddings")
+                count = 0
+                for user_id, vectors in all_face_data.items():
+                    for vector in vectors:
+                        db.execute(
+                            "INSERT INTO face_embeddings (user_id, vector) VALUES (?, ?)",
+                            (user_id, json.dumps(vector)),
+                        )
+                        count += 1
+
+                db.commit()
+                log(
+                    f"Face embeddings saved → {count} vectors for "
+                    f"{len(all_face_data)} users ({page} pages)"
+                )
+            except Exception as e:
+                db.rollback()
+                err(f"Failed to sync face embeddings: {e}")
 
 # --- 2. Camera settings (upsert) ---
 settings_map = {
@@ -251,8 +353,9 @@ if info:
     if info.get("bluetooth_password"):
         settings_map["bluetooth_password"] = info["bluetooth_password"]
 
-    if info.get("facility"):
-        settings_map["facility"] = info["facility"]
+    facility = info.get("facility")
+    if facility and isinstance(facility, dict):
+        settings_map["facility"] = facility.get("name", "")
 
 for key, value in settings_map.items():
     if value:
@@ -296,6 +399,22 @@ if rules:
     db.commit()
     log(f"AI rules saved → {len(rules)} rules")
 
+# --- 4. Detection zones (full replace) ---
+zones: list = data.get("detection_zones", [])
+if zones:
+    db.execute("DELETE FROM detection_zones")
+    for zone in zones:
+        db.execute(
+            "INSERT INTO detection_zones (code, coordinates, in_direction_point) VALUES (?, ?, ?)",
+            (
+                zone.get("code"),
+                json.dumps(zone.get("coordinates", [])),
+                json.dumps(zone.get("in_direction_point")) if zone.get("in_direction_point") else None,
+            ),
+        )
+    db.commit()
+    log(f"Detection zones saved → {len(zones)} zones")
+
 db.close()
 
 # ---------------------------------------------------------------------------
@@ -304,9 +423,9 @@ db.close()
 
 
 def read_json_key(path: Path, key: str) -> str:
-    """Safely read a key from a JSON file, return '' on any error."""
+    """Safely read a key from a JSON file, return '' on any error. Normalizes None→''."""
     try:
-        return json.loads(path.read_text()).get(key, "")
+        return json.loads(path.read_text()).get(key) or ""
     except Exception:
         return ""
 
@@ -317,35 +436,37 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 restart_needed: list[str] = []
-new_cf = data.get("cloudflare_tunnel_token", "")
+new_cf = data.get("cloudflare_tunnel_token") or ""
 
-# if CONFIG_PREV.exists():
-#     old_cf = read_json_key(CONFIG_PREV, "cloudflare_tunnel_token")
+if CONFIG_PREV.exists():
+    old_cf = read_json_key(CONFIG_PREV, "cloudflare_tunnel_token") or ""
 
-#     if old_cf != new_cf and new_cf:
-#         log("Cloudflare token changed — updating tunnel")
-#         cf_service = Path("/etc/systemd/system/cloudflared.service")
+    log(f"  Cloudflare token: old='{old_cf[:8]}...' new='{new_cf[:8]}...' changed={old_cf != new_cf}")
 
-#         if cf_service.exists():
-#             content = cf_service.read_text()
-#             content = re.sub(r"--token\s+\S+", f"--token {new_cf}", content)
-#             cf_service.write_text(content)
-#             run(["systemctl", "daemon-reload"])
-#             run(["systemctl", "restart", "cloudflared"])
-#             log("Cloudflared token updated via service file + restart")
-#         else:
-#             run(["cloudflared", "service", "install", new_cf])
-#             run(["systemctl", "restart", "cloudflared"])
-#             log("Cloudflared tunnel installed (first time)")
+    if old_cf != new_cf and new_cf:
+        log("Cloudflare token changed — updating tunnel")
+        cf_service = Path("/etc/systemd/system/cloudflared.service")
 
-#         restart_needed.append("cloudflared")
-# else:
-#     # First run — setup cloudflare tunnel if token present
-#     if new_cf:
-#         log("First run — installing cloudflare tunnel")
-#         run(["cloudflared", "service", "install", new_cf])
-#         run(["systemctl", "restart", "cloudflared"])
-#         restart_needed.append("cloudflared (first run)")
+        if cf_service.exists():
+            content = cf_service.read_text()
+            content = re.sub(r"--token\s+\S+", f"--token {new_cf}", content)
+            cf_service.write_text(content)
+            run(["systemctl", "daemon-reload"])
+            run(["systemctl", "restart", "cloudflared"])
+            log("Cloudflared token updated via service file + restart")
+        else:
+            run(["cloudflared", "service", "install", new_cf])
+            run(["systemctl", "restart", "cloudflared"])
+            log("Cloudflared tunnel installed (first time)")
+
+        restart_needed.append("cloudflared")
+else:
+    # First run — setup cloudflare tunnel if token present
+    if new_cf:
+        log("First run — installing cloudflare tunnel")
+        run(["cloudflared", "service", "install", new_cf])
+        run(["systemctl", "restart", "cloudflared"])
+        restart_needed.append("cloudflared (first run)")
 
 if restart_needed:
     log(f"Services affected: {', '.join(restart_needed)}")

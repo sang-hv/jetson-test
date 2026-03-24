@@ -1,0 +1,23 @@
+[Unit]
+Description=Network Watchdog (4G/LAN/WiFi Self-Healing)
+Documentation=man:ping(8)
+# Không After=sim7600-4g: modem dial có thể >60s → watchdog + switch-network bị trễ cả boot/SSH.
+# 4G vẫn chạy song song (Wants); watchdog tự heal/restart sim7600 khi cần.
+After=network.target
+Wants=sim7600-4g.service
+
+[Service]
+Type=simple
+ExecStart=/opt/4g/network-watchdog.sh
+ExecReload=/bin/kill -HUP $MAINPID
+PIDFile=/run/network-watchdog.pid
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=net-watchdog
+
+[Install]
+WantedBy=multi-user.target

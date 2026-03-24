@@ -76,7 +76,7 @@ MIC_SOURCE="${USB_SOURCE:-$(pactl get-default-source)}"
 
 load_success=false
 
-# Method 1: WebRTC AEC with gain control
+# Method 1: WebRTC AEC - disable noise suppression + gain control to avoid artifacts
 if [ "$load_success" = false ]; then
     if pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
@@ -84,22 +84,23 @@ if [ "$load_success" = false ]; then
         source_master="$MIC_SOURCE" \
         sink_master="$SPEAKER_SINK" \
         aec_method=webrtc \
-        aec_args="analog_gain_control=0 digital_gain_control=1" 2>/dev/null; then
+        aec_args="analog_gain_control=0 digital_gain_control=0 noise_suppression=0 extended_filter=1" 2>/dev/null; then
         load_success=true
-        log "Echo cancel loaded: webrtc AEC"
+        log "Echo cancel loaded: webrtc AEC (no NS/AGC)"
     fi
 fi
 
-# Method 2: WebRTC AEC default
+# Method 2: WebRTC AEC with only echo cancellation (no noise suppression)
 if [ "$load_success" = false ]; then
     if pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
         source_name=echocancel_source \
         source_master="$MIC_SOURCE" \
         sink_master="$SPEAKER_SINK" \
-        aec_method=webrtc 2>/dev/null; then
+        aec_method=webrtc \
+        aec_args="analog_gain_control=0 digital_gain_control=0" 2>/dev/null; then
         load_success=true
-        log "Echo cancel loaded: webrtc default"
+        log "Echo cancel loaded: webrtc (no AGC)"
     fi
 fi
 
@@ -119,6 +120,10 @@ if [ "$load_success" = false ]; then
     log "WARNING: Echo cancel failed to load (mic: $MIC_SOURCE, speaker: $SPEAKER_SINK)"
 else
     log "Echo cancel ready: echocancel_source / echocancel_sink"
+    # Fix volume: ensure mic capture is at 80% regardless of desktop UI slider
+    pactl set-source-volume echocancel_source 80% 2>/dev/null || true
+    pactl set-source-volume "$MIC_SOURCE" 80% 2>/dev/null || true
+    pactl set-sink-volume echocancel_sink 80% 2>/dev/null || true
 fi
 
 # --- Load switch-on-connect for hot-plug ---

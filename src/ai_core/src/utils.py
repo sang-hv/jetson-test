@@ -367,6 +367,38 @@ def draw_info_overlay(
     return frame
 
 
+def compute_crop_score(
+    bbox: np.ndarray,
+    frame_shape: tuple,
+    edge_margin: float = 0.02,
+) -> float:
+    """Score a person bbox for crop quality (higher = better).
+
+    Considers bbox area and penalizes bboxes near frame edges.
+    """
+    h, w = frame_shape[:2]
+    x1, y1, x2, y2 = bbox[:4].astype(float)
+
+    box_area = max(0.0, (x2 - x1) * (y2 - y1))
+
+    margin_x = w * edge_margin
+    margin_y = h * edge_margin
+
+    left_dist = min(max(x1, 0.0), margin_x)
+    top_dist = min(max(y1, 0.0), margin_y)
+    right_dist = min(max(w - x2, 0.0), margin_x)
+    bottom_dist = min(max(h - y2, 0.0), margin_y)
+
+    visibility = (
+        (left_dist / margin_x)
+        * (top_dist / margin_y)
+        * (right_dist / margin_x)
+        * (bottom_dist / margin_y)
+    )
+
+    return box_area * visibility
+
+
 def crop_with_padding(
     image: np.ndarray,
     bbox: np.ndarray,
@@ -405,6 +437,83 @@ def format_time_ms(ms: float) -> str:
         return f"{ms:.0f}ms"
     else:
         return f"{ms / 1000:.1f}s"
+
+
+def _cross_sign_px(
+    line_start: Tuple[int, int],
+    line_end: Tuple[int, int],
+    point: Tuple[int, int],
+) -> int:
+    """Return +1 / -1 / 0 for which side of the line the point is on."""
+    dx = line_end[0] - line_start[0]
+    dy = line_end[1] - line_start[1]
+    px = point[0] - line_start[0]
+    py = point[1] - line_start[1]
+    cross = dx * py - dy * px
+    if cross > 0:
+        return 1
+    elif cross < 0:
+        return -1
+    return 0
+
+
+def draw_in_zone_overlay(
+    frame: np.ndarray,
+    pt1: Tuple[int, int],
+    pt2: Tuple[int, int],
+    in_point: Tuple[int, int],
+    color: Tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.15,
+) -> np.ndarray:
+    """Draw a semi-transparent overlay on the IN zone side of the counting line."""
+    h, w = frame.shape[:2]
+    in_sign = _cross_sign_px(pt1, pt2, in_point)
+    if in_sign == 0:
+        return frame
+
+    # Collect frame corners on the IN side
+    corners = [(0, 0), (w, 0), (w, h), (0, h)]
+    in_corners = [c for c in corners if _cross_sign_px(pt1, pt2, c) == in_sign]
+
+    # Build polygon: pt1 -> in-side corners (sorted by angle) -> pt2
+    # Sort corners clockwise around centroid of the polygon
+    all_pts = [pt1] + in_corners + [pt2]
+    cx = sum(p[0] for p in all_pts) / len(all_pts)
+    cy = sum(p[1] for p in all_pts) / len(all_pts)
+    import math
+    all_pts.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+
+    polygon = np.array(all_pts, dtype=np.int32)
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [polygon], color)
+    return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+
+def draw_detection_zone(
+    frame: np.ndarray,
+    zone: Tuple[float, float, float, float],
+    color: Tuple[int, int, int] = (255, 200, 0),
+    thickness: int = 2,
+    alpha: float = 0.08,
+) -> np.ndarray:
+    """Draw the detection zone rectangle with a subtle fill overlay."""
+    h, w = frame.shape[:2]
+    x1 = int(zone[0] * w)
+    y1 = int(zone[1] * h)
+    x2 = int(zone[2] * w)
+    y2 = int(zone[3] * h)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+    label = "DETECTION ZONE"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+    cv2.putText(frame, label, (x1 + 4, y1 + th + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+    return frame
 
 
 def draw_counting_line(

@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
+import numpy as np
+
 from .detector import TrackedPerson
 
 
@@ -27,6 +29,8 @@ class CrossingEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
+    frame: Optional[np.ndarray] = None
+    bbox: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -36,41 +40,51 @@ class PasserbyEvent:
     person_id: str = "Unknown"
     age: Optional[int] = None
     gender: Optional[str] = None
+    frame: Optional[np.ndarray] = None
+    bbox: Optional[np.ndarray] = None
 
 
 class ZoneCounter:
     """
     Counts people moving between zones defined by a dividing line.
 
-    The line splits the frame into two zones. `origin_direction` determines
-    which side of the line (the side containing the origin (0,0)) is "in" or "out".
+    The line splits the frame into two zones. `in_direction_point` is a point
+    that belongs to the IN zone, used to determine which side is IN vs OUT.
     """
 
     def __init__(
         self,
         line_start: Tuple[float, float],
         line_end: Tuple[float, float],
-        origin_direction: str = "in",
+        in_direction_point: Tuple[float, float] = (0.5, 0.25),
     ):
         self._line_start = line_start  # (x, y) as ratio 0.0-1.0
         self._line_end = line_end
-        self._origin_direction = origin_direction  # "in" or "out"
+        self._in_direction_point = in_direction_point
 
         # Per-track zone state
         self._track_first_zone: dict[int, str] = {}  # track_id -> "in"/"out"
         self._track_last_zone: dict[int, str] = {}   # track_id -> "in"/"out"
         self._track_last_seen: dict[int, int] = {}   # track_id -> frame_number
         self._track_person_info: dict[int, dict] = {}  # track_id -> {person_id, age, gender}
+        self._track_best_frame: dict[int, np.ndarray] = {}  # track_id -> best quality full frame
+        self._track_best_bbox: dict[int, np.ndarray] = {}  # track_id -> bbox of best frame
+        self._track_best_score: dict[int, float] = {}  # track_id -> best score
+        self._track_ever_in: dict[int, bool] = {}  # track_id -> ever been in "in" zone
 
         self._in_count = 0
         self._out_count = 0
         self._passerby_count = 0
         self._lock = threading.Lock()
 
-        # Pre-compute origin sign (which side of the line (0,0) is on)
-        self._origin_sign = self._cross_sign(
-            self._line_start, self._line_end, (0.0, 0.0)
+        # Pre-compute which side of the line the IN zone is on
+        self._in_sign = self._cross_sign(
+            self._line_start, self._line_end, in_direction_point
         )
+        if self._in_sign == 0:
+            raise ValueError(
+                f"in_direction_point {in_direction_point} lies on the counting line"
+            )
 
     @staticmethod
     def _cross_sign(
@@ -96,19 +110,16 @@ class ZoneCounter:
             self._line_start, self._line_end, (cx_ratio, cy_ratio)
         )
         if sign == 0:
-            # On the line — treat as same side as origin
-            sign = self._origin_sign
-        if sign == self._origin_sign:
-            return self._origin_direction  # origin side
-        else:
-            return "out" if self._origin_direction == "in" else "in"
+            sign = self._in_sign
+        return "in" if sign == self._in_sign else "out"
 
     def update(
         self,
         tracked_persons: List[TrackedPerson],
-        frame_shape: Tuple[int, ...],
+        frame: np.ndarray,
         frame_number: int,
         track_infos: Optional[Dict[int, dict]] = None,
+        track_scores: Optional[Dict[int, float]] = None,
     ) -> None:
         """
         Update zone tracking for current frame's tracked persons.
@@ -116,8 +127,10 @@ class ZoneCounter:
         Records first_zone on first appearance and continuously updates last_zone.
         Also caches person info (label, age, gender) so it's available when the
         track is lost (TrackManager may have already cleaned it up by then).
+        When a better quality score is found, stores a copy of the full frame
+        and the corresponding bbox for later saving with drawn bounding box.
         """
-        h, w = frame_shape[:2]
+        h, w = frame.shape[:2]
 
         with self._lock:
             for person in tracked_persons:
@@ -133,9 +146,20 @@ class ZoneCounter:
 
                 self._track_last_zone[track_id] = zone
                 self._track_last_seen[track_id] = frame_number
+                if zone == "in":
+                    self._track_ever_in[track_id] = True
+                elif track_id not in self._track_ever_in:
+                    self._track_ever_in[track_id] = False
 
                 if track_infos and track_id in track_infos:
                     self._track_person_info[track_id] = track_infos[track_id]
+
+                if track_scores and track_id in track_scores:
+                    score = track_scores[track_id]
+                    if score > self._track_best_score.get(track_id, -1.0):
+                        self._track_best_frame[track_id] = frame.copy()
+                        self._track_best_bbox[track_id] = person.bbox.copy()
+                        self._track_best_score[track_id] = score
 
     def process_lost_tracks(
         self,
@@ -169,6 +193,9 @@ class ZoneCounter:
                 last_zone = self._track_last_zone.get(tid)
                 info = self._track_person_info.get(tid, {})
 
+                best_frame = self._track_best_frame.get(tid)
+                best_bbox = self._track_best_bbox.get(tid)
+
                 if first_zone and last_zone and first_zone != last_zone:
                     if first_zone == "out" and last_zone == "in":
                         direction = "in"
@@ -182,8 +209,10 @@ class ZoneCounter:
                         person_id=info.get("person_id", "Unknown"),
                         age=info.get("age"),
                         gender=info.get("gender"),
+                        frame=best_frame,
+                        bbox=best_bbox,
                     ))
-                elif first_zone == "out" and last_zone == "out":
+                elif first_zone == "out" and last_zone == "out" and not self._track_ever_in.get(tid, False):
                     pid = info.get("person_id", "Unknown")
                     if pid == "Unknown" or pid.endswith("?"):
                         self._passerby_count += 1
@@ -192,6 +221,8 @@ class ZoneCounter:
                             person_id=pid,
                             age=info.get("age"),
                             gender=info.get("gender"),
+                            frame=best_frame,
+                            bbox=best_bbox,
                         ))
 
                 # Cleanup state for this track
@@ -199,6 +230,10 @@ class ZoneCounter:
                 self._track_last_zone.pop(tid, None)
                 self._track_last_seen.pop(tid, None)
                 self._track_person_info.pop(tid, None)
+                self._track_best_frame.pop(tid, None)
+                self._track_best_bbox.pop(tid, None)
+                self._track_best_score.pop(tid, None)
+                self._track_ever_in.pop(tid, None)
 
         return crossings, passerby_events
 
@@ -226,6 +261,16 @@ class ZoneCounter:
         pt2 = (int(self._line_end[0] * w), int(self._line_end[1] * h))
         return pt1, pt2
 
+    def get_in_direction_point_px(
+        self, frame_shape: Tuple[int, ...]
+    ) -> Tuple[int, int]:
+        """Convert in_direction_point from ratio coordinates to pixel coordinates."""
+        h, w = frame_shape[:2]
+        return (
+            int(self._in_direction_point[0] * w),
+            int(self._in_direction_point[1] * h),
+        )
+
 
 @dataclass
 class StrangerAlertEvent:
@@ -243,6 +288,10 @@ class _StrangerAlertState:
     track_id: int
     last_alert_time: float
     alert_count: int = 0
+    alerted: bool = False
+    person_id: str = "Unknown"
+    age: Optional[int] = None
+    gender: Optional[str] = None
 
 
 class StrangerAlertManager:
@@ -254,8 +303,9 @@ class StrangerAlertManager:
     stranger remains in the zone and unrecognized.
     """
 
-    def __init__(self, alert_interval: float = 10.0):
+    def __init__(self, alert_interval: float = 10.0, grace_period: float = 0.0):
         self._alert_interval = alert_interval
+        self._grace_period = grace_period
         self._tracked_strangers: dict[int, _StrangerAlertState] = {}
         self._lock = threading.Lock()
 
@@ -277,24 +327,56 @@ class StrangerAlertManager:
             # Remove tracks no longer in the stranger set (left zone or recognized)
             stale = [tid for tid in self._tracked_strangers if tid not in stranger_in_zone]
             for tid in stale:
+                state = self._tracked_strangers[tid]
+                if not state.alerted:
+                    # Stranger disappeared before grace period expired — fire alert now
+                    alerts.append(StrangerAlertEvent(
+                        track_id=tid,
+                        person_id=state.person_id,
+                        age=state.age,
+                        gender=state.gender,
+                        alert_count=1,
+                    ))
                 del self._tracked_strangers[tid]
 
             for tid, info in stranger_in_zone.items():
                 if tid not in self._tracked_strangers:
-                    # New stranger — alert immediately
+                    created_at = info.get("created_at", now)
+                    in_grace = now - created_at < self._grace_period
                     self._tracked_strangers[tid] = _StrangerAlertState(
-                        track_id=tid, last_alert_time=now, alert_count=1,
-                    )
-                    alerts.append(StrangerAlertEvent(
                         track_id=tid,
+                        last_alert_time=now,
+                        alert_count=0 if in_grace else 1,
+                        alerted=not in_grace,
                         person_id=info.get("person_id", "Unknown"),
                         age=info.get("age"),
                         gender=info.get("gender"),
-                        alert_count=1,
-                    ))
+                    )
+                    if not in_grace:
+                        alerts.append(StrangerAlertEvent(
+                            track_id=tid,
+                            person_id=info.get("person_id", "Unknown"),
+                            age=info.get("age"),
+                            gender=info.get("gender"),
+                            alert_count=1,
+                        ))
                 else:
                     state = self._tracked_strangers[tid]
-                    if now - state.last_alert_time >= self._alert_interval:
+                    if not state.alerted:
+                        # Still in grace period — check if it has now expired
+                        created_at = info.get("created_at", now)
+                        if now - created_at >= self._grace_period:
+                            state.alerted = True
+                            state.alert_count = 1
+                            state.last_alert_time = now
+                            alerts.append(StrangerAlertEvent(
+                                track_id=tid,
+                                person_id=info.get("person_id", "Unknown"),
+                                age=info.get("age"),
+                                gender=info.get("gender"),
+                                alert_count=1,
+                            ))
+                    elif now - state.last_alert_time >= self._alert_interval:
                         state.last_alert_time = now
                         state.alert_count += 1
                         alerts.append(StrangerAlertEvent(

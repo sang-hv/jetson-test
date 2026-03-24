@@ -28,6 +28,7 @@ class ZMQPublisher:
     STRANGER_ALERT_TOPIC = b"stranger_alert"
     PASSERBY_TOPIC = b"passerby_event"
     ANIMAL_ALERT_TOPIC = b"animal_alert"
+    PERSON_COUNT_TOPIC = b"person_count"
 
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
@@ -80,6 +81,16 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher animal alert send failed: {exc}")
+
+    def send_person_count(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the person_count topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.PERSON_COUNT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher person count send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""
