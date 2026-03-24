@@ -1,20 +1,129 @@
 """
-Shop camera pipeline.
+Shop camera pipeline with real-time zone entry notifications.
 
-Extends BasePipeline with shop-specific features.
-Currently a skeleton — ready for future additions such as:
-- Customer counting per time period
-- Heatmap generation
-- Customer vs staff distinction
-- Dwell time tracking
+Extends BasePipeline with shop-specific features:
+- Real-time ZMQ notification when a person enters the IN zone
+- Person info: known/unknown identity, age, gender
 """
 
 from __future__ import annotations
 
+import time
+from typing import TYPE_CHECKING, List, Set
+
+import numpy as np
+
 from .base_pipeline import BasePipeline
+from .detector import TrackedAnimal, TrackedPerson
+from .utils import (
+    compute_crop_score,
+    draw_counting_info,
+    draw_counting_line,
+    draw_in_zone_overlay,
+)
+
+if TYPE_CHECKING:
+    from .pipeline import Config
 
 
 class ShopPipeline(BasePipeline):
-    """Pipeline for shop cameras. Inherits generic detection + recognition from BasePipeline."""
+    """Pipeline for shop cameras with zone entry notifications."""
 
-    pass
+    def _init_extra_components(self) -> None:
+        config = self.config
+
+        self.counter = None
+        self._zone_entry_notified: Set[int] = set()
+
+        if config.counting_enabled:
+            from .counter import ZoneCounter
+
+            self.counter = ZoneCounter(
+                line_start=config.counting_line_start,
+                line_end=config.counting_line_end,
+                in_direction_point=config.counting_in_direction_point,
+            )
+            print(f"[ShopPipeline] Zone entry detection: Enabled (line {config.counting_line_start} -> {config.counting_line_end})")
+        else:
+            print("[ShopPipeline] Zone entry detection: Disabled (set COUNTING_ENABLED=true)")
+
+    def _on_detections(
+        self,
+        tracked_persons: List[TrackedPerson],
+        tracked_animals: List[TrackedAnimal],
+        frame: np.ndarray,
+    ) -> None:
+        if self.counter is None:
+            return
+
+        active_ids = set(p.track_id for p in tracked_persons)
+
+        # Gather track info for zone counter
+        track_infos = {}
+        track_scores = {}
+        for person in tracked_persons:
+            tid = person.track_id
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_infos[tid] = {
+                "person_id": self.track_manager.get_label(tid),
+                "age": age,
+                "gender": gender,
+            }
+            track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
+
+        self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
+
+        # Cleanup lost tracks to free ZoneCounter internal state
+        self.counter.process_lost_tracks(
+            list(active_ids), self._frame_count, self.config.counting_cleanup_max_age
+        )
+
+        # Detect new entries into IN zone
+        in_zone_tracks = self.counter.get_tracks_in_zone("in")
+
+        # Remove from notified set if track left IN zone or is no longer active
+        self._zone_entry_notified &= in_zone_tracks & active_ids
+
+        # Find tracks that just entered IN zone
+        new_entries = (in_zone_tracks & active_ids) - self._zone_entry_notified
+        if not new_entries or self.zmq_publisher is None:
+            return
+
+        track_bboxes = {p.track_id: p.bbox for p in tracked_persons}
+        detections = []
+        for tid in new_entries:
+            self._zone_entry_notified.add(tid)
+
+            info = track_infos.get(tid, {})
+            track_info = self.track_manager.get_track_info(tid)
+            confidence = track_info.get("avg_score") if track_info else None
+
+            # Save detection image
+            detection_result = None
+            bbox = track_bboxes.get(tid)
+            if bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    frame, bbox, "zone_entry", tid, info.get("person_id", "Unknown"),
+                )
+
+            detections.append({
+                "track_id": tid,
+                "person_id": info.get("person_id", "Unknown"),
+                "age": info.get("age"),
+                "gender": info.get("gender"),
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        payload = {"timestamp": time.time(), "detections": detections}
+        self.zmq_publisher.send_zone_entry(payload)
+
+    def _draw_extra_overlays(self, frame: np.ndarray) -> np.ndarray:
+        if self.counter is not None:
+            pt1, pt2 = self.counter.get_line_points_px(frame.shape)
+            in_pt = self.counter.get_in_direction_point_px(frame.shape)
+            frame = draw_in_zone_overlay(frame, pt1, pt2, in_pt)
+            frame = draw_counting_line(frame, pt1, pt2)
+            in_count, out_count = self.counter.get_counts()
+            frame = draw_counting_info(frame, in_count, out_count)
+        return frame

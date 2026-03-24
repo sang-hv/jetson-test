@@ -169,7 +169,8 @@ class HomePipeline(BasePipeline):
                 "detection_result": detection_result,
             })
         payload = {"timestamp": time.time(), "detections": detections}
-        self.zmq_publisher.send_detection(payload)
+        if self.zmq_publisher is not None:
+            self.zmq_publisher.send_detection(payload)
 
     def _publish_passerby_events(self, events) -> None:
         """Build ZMQ payload from passerby events and publish."""
@@ -188,7 +189,8 @@ class HomePipeline(BasePipeline):
                 "detection_result": detection_result,
             })
         payload = {"timestamp": time.time(), "detections": detections}
-        self.zmq_publisher.send_passerby_event(payload)
+        if self.zmq_publisher is not None:
+            self.zmq_publisher.send_passerby_event(payload)
 
     def _publish_animal_alerts(self, alerts, frame=None, track_bboxes=None) -> None:
         """Build ZMQ payload from animal alert events and publish."""
@@ -209,7 +211,8 @@ class HomePipeline(BasePipeline):
                 "detection_result": detection_result,
             })
         payload = {"timestamp": time.time(), "detections": detections}
-        self.zmq_publisher.send_animal_alert(payload)
+        if self.zmq_publisher is not None:
+            self.zmq_publisher.send_animal_alert(payload)
 
     def _publish_stranger_alerts(self, alerts, frame=None, track_bboxes=None) -> None:
         """Build ZMQ payload from stranger alert events and publish."""
@@ -230,4 +233,5 @@ class HomePipeline(BasePipeline):
                 "detection_result": detection_result,
             })
         payload = {"timestamp": time.time(), "detections": detections}
-        self.zmq_publisher.send_stranger_alert(payload)
+        if self.zmq_publisher is not None:
+            self.zmq_publisher.send_stranger_alert(payload)
