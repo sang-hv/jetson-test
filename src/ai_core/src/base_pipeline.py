@@ -116,9 +116,8 @@ class BasePipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
-        # Initialize ZMQ publisher
-        from .zmq_publisher import ZMQPublisher
-        self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+        # ZMQ publisher disabled (SHM-only runtime, no tcp://*:5555 bind)
+        self.zmq_publisher = None
         self._prev_person_count: int = -1
 
         # Initialize detection image saver
@@ -370,7 +369,7 @@ class BasePipeline:
         frame = draw_info_overlay(frame, fps, current_person_count, queue_info)
 
         # Publish person count change via ZMQ
-        if current_person_count != self._prev_person_count:
+        if self.zmq_publisher is not None and current_person_count != self._prev_person_count:
             self.zmq_publisher.send_person_count({
                 "timestamp": time.time(),
                 "person_count": current_person_count,
