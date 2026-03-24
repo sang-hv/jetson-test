@@ -164,6 +164,8 @@ class BasePipeline:
         print(f"Device: {config.device}")
         if config.video_source_type == "zmq":
             print(f"Source: ZMQ ({config.zmq_video_endpoint})")
+        elif config.video_source_type == "shm":
+            print(f"Source: SHM ({config.shm_video_name})")
         else:
             print(f"Source: {config.source}")
         print(f"Known faces: {config.known_dir}")
@@ -225,6 +227,17 @@ class BasePipeline:
             print(f"[Pipeline] Opening ZMQ video source: {endpoint} (timeout={timeout}ms)")
             return ZMQVideoSource(
                 endpoint=endpoint,
+                recv_timeout_ms=timeout,
+            )
+
+        if self.config.video_source_type == "shm":
+            from .shm_video_source import SharedMemoryVideoSource
+
+            name = self.config.shm_video_name
+            timeout = self.config.zmq_recv_timeout_ms
+            print(f"[Pipeline] Opening SHM video source: {name} (timeout={timeout}ms)")
+            return SharedMemoryVideoSource(
+                shm_name=name,
                 recv_timeout_ms=timeout,
             )
 
@@ -420,8 +433,8 @@ class BasePipeline:
                 ret, frame = cap.read()
 
                 if not ret:
-                    # ZMQ source: False = timeout/reconnecting, keep waiting
-                    if self.config.video_source_type == "zmq":
+                    # ZMQ / SHM: False = timeout, keep waiting
+                    if self.config.video_source_type in ("zmq", "shm"):
                         continue
                     # Camera index: might be temporary, retry
                     if self.config.source.isdigit():
