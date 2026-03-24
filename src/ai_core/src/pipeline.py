@@ -100,8 +100,8 @@ class Config:
     video_source_type: str = "opencv"
     zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
     zmq_recv_timeout_ms: int = 2000
-    # Shared memory (raw BGR from start-stream.py; must match STREAM_SHM_NAME)
-    shm_video_name: str = "/mini_pc_ai_frames"
+    # Shared-memory mmap file (raw BGR from start-stream.py; must match STREAM_SHM_PATH)
+    shm_video_name: str = "/dev/shm/mini_pc_ai_frames.bin"
 
     # Detection image saving directory
     detection_image_dir: str = "detection"
@@ -215,7 +215,10 @@ class Config:
         video_source_type = env_vars.get("VIDEO_SOURCE_TYPE", "opencv").lower()
         zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
         zmq_recv_timeout_ms = int(env_vars.get("ZMQ_RECV_TIMEOUT_MS", "2000"))
-        shm_video_name = env_vars.get("SHM_VIDEO_NAME", "/mini_pc_ai_frames")
+        shm_video_name = env_vars.get(
+            "SHM_VIDEO_PATH",
+            env_vars.get("SHM_VIDEO_NAME", "/dev/shm/mini_pc_ai_frames.bin"),
+        )
 
         # Parse detection image directory from .env
         detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")

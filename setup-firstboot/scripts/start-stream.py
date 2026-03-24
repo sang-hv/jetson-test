@@ -17,6 +17,7 @@
 ###############################################################################
 
 import argparse
+import mmap
 import os
 import signal
 import struct
@@ -42,8 +43,13 @@ AI_WIDTH = 1920
 AI_HEIGHT = 1080
 AI_MAX_FPS = 5
 
-# POSIX shared memory name (must start with / on Linux)
-SHM_NAME = os.environ.get("STREAM_SHM_NAME", "/mini_pc_ai_frames")
+# Shared memory backing file path.
+# Accept legacy STREAM_SHM_NAME (/mini_pc_ai_frames) and normalize to /dev/shm/<name>.bin
+_raw_shm_path = os.environ.get("STREAM_SHM_PATH", os.environ.get("STREAM_SHM_NAME", "/mini_pc_ai_frames"))
+if _raw_shm_path.startswith("/dev/shm/"):
+    SHM_PATH = _raw_shm_path
+else:
+    SHM_PATH = f"/dev/shm/{_raw_shm_path.lstrip('/')}.bin"
 
 # Health watchdog: if no frame produced for this many seconds, pipeline is stalled → exit
 HEALTH_TIMEOUT_SEC = 30
@@ -57,41 +63,41 @@ FORMAT_BGR = 0
 # Shared memory writer (double buffer; protocol matches ai_core shm_video_source)
 # ---------------------------------------------------------------------------
 _shm = None
+_shm_fd = None
 _shm_lock = threading.Lock()
 _shm_active_slot = 0
 _shm_seq = 0
 
 
-def _unlink_shm_if_exists(name: str) -> None:
+def _unlink_shm_if_exists(path: str) -> None:
     try:
-        from multiprocessing import shared_memory
-
-        old = shared_memory.SharedMemory(name=name, create=False)
-        old.close()
-        old.unlink()
+        if os.path.exists(path):
+            os.remove(path)
     except FileNotFoundError:
         pass
     except Exception as e:
-        print(f"[stream] WARNING: could not unlink old SHM {name!r}: {e}", file=sys.stderr, flush=True)
+        print(f"[stream] WARNING: could not remove old SHM file {path!r}: {e}", file=sys.stderr, flush=True)
 
 
 def init_shm_writer() -> bool:
-    """Create POSIX shared memory segment for raw BGR frames."""
-    global _shm
-    from multiprocessing import shared_memory
+    """Create file-backed mmap segment for raw BGR frames."""
+    global _shm, _shm_fd
 
     stride = AI_WIDTH * 3
     slot_bytes = stride * AI_HEIGHT
     total = HEADER_SIZE + 2 * slot_bytes
 
-    _unlink_shm_if_exists(SHM_NAME)
+    os.makedirs("/dev/shm", exist_ok=True)
+    _unlink_shm_if_exists(SHM_PATH)
     try:
-        _shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=total)
+        _shm_fd = os.open(SHM_PATH, os.O_CREAT | os.O_RDWR, 0o666)
+        os.ftruncate(_shm_fd, total)
+        _shm = mmap.mmap(_shm_fd, total, access=mmap.ACCESS_WRITE)
     except Exception as e:
         print(f"[stream] ERROR: SHM create failed: {e}", file=sys.stderr, flush=True)
         return False
 
-    buf = _shm.buf
+    buf = _shm
     buf[0:4] = MAGIC
     struct.pack_into("<I", buf, 4, 1)  # version
     struct.pack_into("<I", buf, 8, AI_WIDTH)
@@ -102,7 +108,7 @@ def init_shm_writer() -> bool:
     struct.pack_into("<I", buf, 32, 0)
 
     print(
-        f"[stream] SHM writer: {SHM_NAME} size={total} ({AI_WIDTH}x{AI_HEIGHT} BGR x2)",
+        f"[stream] SHM writer: {SHM_PATH} size={total} ({AI_WIDTH}x{AI_HEIGHT} BGR x2)",
         file=sys.stderr,
         flush=True,
     )
@@ -126,28 +132,31 @@ def publish_frame_bgr(raw: bytes) -> None:
     offset = HEADER_SIZE + inactive * expected
 
     with _shm_lock:
-        _shm.buf[offset : offset + expected] = raw
-        struct.pack_into("<I", _shm.buf, 8, AI_WIDTH)
-        struct.pack_into("<I", _shm.buf, 12, AI_HEIGHT)
-        struct.pack_into("<I", _shm.buf, 16, stride)
-        struct.pack_into("<I", _shm.buf, 32, inactive & 1)
+        _shm[offset : offset + expected] = raw
+        struct.pack_into("<I", _shm, 8, AI_WIDTH)
+        struct.pack_into("<I", _shm, 12, AI_HEIGHT)
+        struct.pack_into("<I", _shm, 16, stride)
+        struct.pack_into("<I", _shm, 32, inactive & 1)
         _shm_seq += 1
-        struct.pack_into("<Q", _shm.buf, 24, _shm_seq)
+        struct.pack_into("<Q", _shm, 24, _shm_seq)
         _shm_active_slot = inactive
 
 
 def close_shm_writer() -> None:
-    global _shm
+    global _shm, _shm_fd
     if _shm is not None:
         try:
             _shm.close()
-            _shm.unlink()
         except Exception:
-            try:
-                _shm.close()
-            except Exception:
-                pass
+            pass
         _shm = None
+    if _shm_fd is not None:
+        try:
+            os.close(_shm_fd)
+        except Exception:
+            pass
+        _shm_fd = None
+    _unlink_shm_if_exists(SHM_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +369,7 @@ def main() -> int:
         err("Failed to init SHM — exiting")
         return 1
 
-    log(f"AI frames: SHM {SHM_NAME} (max {AI_MAX_FPS}fps, {AI_WIDTH}x{AI_HEIGHT} BGR)")
+    log(f"AI frames: SHM {SHM_PATH} (max {AI_MAX_FPS}fps, {AI_WIDTH}x{AI_HEIGHT} BGR)")
 
     pipeline = build_pipeline(with_audio, mode=args.mode)
     pipeline.set_state(Gst.State.PLAYING)

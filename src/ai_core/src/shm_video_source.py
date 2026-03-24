@@ -17,6 +17,8 @@ Protocol (must match setup-firstboot/scripts/start-stream.py):
 from __future__ import annotations
 
 import logging
+import mmap
+import os
 import struct
 import time
 from typing import Optional, Tuple, Union
@@ -32,18 +34,23 @@ MAGIC = b"MPAI"
 class SharedMemoryVideoSource:
     """
     Drop-in replacement for cv2.VideoCapture — read()/isOpened()/release()/get().
-    Attaches to POSIX shared memory created by start-stream.py (writer).
+    Attaches to file-backed mmap in /dev/shm created by start-stream.py (writer).
     """
 
     def __init__(
         self,
-        shm_name: str = "/mini_pc_ai_frames",
+        shm_name: str = "/dev/shm/mini_pc_ai_frames.bin",
         recv_timeout_ms: int = 2000,
     ) -> None:
         self._shm_name = shm_name
+        if self._shm_name.startswith("/dev/shm/"):
+            self._shm_path = self._shm_name
+        else:
+            self._shm_path = f"/dev/shm/{self._shm_name.lstrip('/')}.bin"
         self._recv_timeout_ms = recv_timeout_ms
         self._closed = False
         self._shm = None
+        self._shm_fd: Optional[int] = None
         self._last_seq: int = -1
         self._frame_width: int = 0
         self._frame_height: int = 0
@@ -65,33 +72,40 @@ class SharedMemoryVideoSource:
             except Exception:
                 pass
             self._shm = None
+        if self._shm_fd is not None:
+            try:
+                os.close(self._shm_fd)
+            except Exception:
+                pass
+            self._shm_fd = None
 
     def _connect(self) -> bool:
-        from multiprocessing import shared_memory
-
         self._last_connect_attempt = time.monotonic()
         self._close_shm()
         try:
-            self._shm = shared_memory.SharedMemory(name=self._shm_name, create=False)
+            self._shm_fd = os.open(self._shm_path, os.O_RDONLY)
+            size = os.fstat(self._shm_fd).st_size
+            self._shm = mmap.mmap(self._shm_fd, size, access=mmap.ACCESS_READ)
         except FileNotFoundError:
             self._shm = None
+            self._shm_fd = None
             return False
 
-        if len(self._shm.buf) < HEADER_SIZE:
-            logger.warning("Shared memory too small: %d", len(self._shm.buf))
+        if len(self._shm) < HEADER_SIZE:
+            logger.warning("Shared memory too small: %d", len(self._shm))
             self._close_shm()
             return False
 
-        if bytes(self._shm.buf[0:4]) != MAGIC:
+        if bytes(self._shm[0:4]) != MAGIC:
             logger.warning(
                 "SHM magic mismatch (got %r); writer may not have started yet",
-                bytes(self._shm.buf[0:4]),
+                bytes(self._shm[0:4]),
             )
 
         logger.info(
             "SharedMemoryVideoSource attached: %s size=%d",
-            self._shm_name,
-            len(self._shm.buf),
+            self._shm_path,
+            len(self._shm),
         )
         # Writer may restart and reset seq; allow new frames to be consumed.
         self._last_seq = -1
@@ -104,7 +118,7 @@ class SharedMemoryVideoSource:
         if now - self._last_connect_attempt < self._reconnect_interval_sec:
             return
         if self._connect():
-            logger.info("SharedMemoryVideoSource reconnected to %s", self._shm_name)
+            logger.info("SharedMemoryVideoSource reconnected to %s", self._shm_path)
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
@@ -125,7 +139,7 @@ class SharedMemoryVideoSource:
                 continue
 
             try:
-                seq = struct.unpack_from("<Q", self._shm.buf, 24)[0]
+                seq = struct.unpack_from("<Q", self._shm, 24)[0]
             except Exception:
                 # Writer may have restarted/unlinked while reading.
                 self._close_shm()
@@ -135,10 +149,10 @@ class SharedMemoryVideoSource:
 
             if seq != self._last_seq and seq > 0:
                 try:
-                    w = struct.unpack_from("<I", self._shm.buf, 8)[0]
-                    h = struct.unpack_from("<I", self._shm.buf, 12)[0]
-                    stride = struct.unpack_from("<I", self._shm.buf, 16)[0]
-                    slot = struct.unpack_from("<I", self._shm.buf, 32)[0]
+                    w = struct.unpack_from("<I", self._shm, 8)[0]
+                    h = struct.unpack_from("<I", self._shm, 12)[0]
+                    stride = struct.unpack_from("<I", self._shm, 16)[0]
+                    slot = struct.unpack_from("<I", self._shm, 32)[0]
                 except Exception:
                     self._close_shm()
                     self._maybe_reconnect()
@@ -149,11 +163,11 @@ class SharedMemoryVideoSource:
                     continue
                 frame_bytes = stride * h
                 slot_offset = HEADER_SIZE + (slot & 1) * frame_bytes
-                if slot_offset + frame_bytes > len(self._shm.buf):
+                if slot_offset + frame_bytes > len(self._shm):
                     logger.error("SHM frame out of bounds")
                     return False, None
 
-                mv = memoryview(self._shm.buf)[slot_offset : slot_offset + frame_bytes]
+                mv = memoryview(self._shm)[slot_offset : slot_offset + frame_bytes]
                 raw = np.frombuffer(mv, dtype=np.uint8, count=frame_bytes)
                 row_b = w * 3
                 if stride == row_b:
