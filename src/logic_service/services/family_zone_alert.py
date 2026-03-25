@@ -19,7 +19,7 @@ from datetime import datetime, time, timezone
 import aiosqlite
 from cachetools import TTLCache
 
-from schemas.event_models import (
+from schemas.family_models import (
     AnimalAlertPayload,
     CrossingDetection,
     CrossingEventPayload,
