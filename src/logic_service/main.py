@@ -101,27 +101,34 @@ async def _zmq_subscriber_loop() -> None:
                     result = await process_animal_alert(payload, db)
                 elif topic == ZMQ_ZONE_ENTRY_TOPIC:
                     data = json.loads(raw)
+                    timestamp = data.get("timestamp")
                     for det in data.get("detections", []):
                         person_id = det.get("person_id", "Unknown")
                         age = det.get("age")
                         gender = det.get("gender")
                         confidence = det.get("confidence")
                         track_id = det.get("track_id")
+                        detection_result = det.get("detection_result")
                         logger.info(
                             f"Zone entry: track={track_id} person={person_id} "
-                            f"age={age} gender={gender} confidence={confidence}"
+                            f"age={age} gender={gender} confidence={confidence} "
+                            f"detection_result={detection_result} timestamp={timestamp}"
                         )
                     continue
                 elif topic == ZMQ_ZONE_EXIT_TOPIC:
                     data = json.loads(raw)
+                    timestamp = data.get("timestamp")
                     for det in data.get("detections", []):
                         person_id = det.get("person_id", "Unknown")
                         age = det.get("age")
                         gender = det.get("gender")
+                        confidence = det.get("confidence")
                         track_id = det.get("track_id")
+                        detection_result = det.get("detection_result")
                         logger.info(
                             f"Zone exit: track={track_id} person={person_id} "
-                            f"age={age} gender={gender}"
+                            f"age={age} gender={gender} confidence={confidence} "
+                            f"detection_result={detection_result} timestamp={timestamp}"
                         )
                     continue
                 elif topic == ZMQ_PERSON_COUNT_TOPIC:

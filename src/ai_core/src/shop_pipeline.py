@@ -91,11 +91,14 @@ class ShopPipeline(BasePipeline):
                     detection_result = self.detection_saver.save_frame_with_box(
                         c.frame, c.bbox, "zone_exit", c.track_id, c.person_id,
                     )
+                track_info = self.track_manager.get_track_info(c.track_id)
+                confidence = track_info.get("avg_score") if track_info else None
                 exit_detections.append({
                     "track_id": c.track_id,
                     "person_id": c.person_id,
                     "age": c.age,
                     "gender": c.gender,
+                    "confidence": confidence,
                     "detection_result": detection_result,
                 })
             if exit_detections:
