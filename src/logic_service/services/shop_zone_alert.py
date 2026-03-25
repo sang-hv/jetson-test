@@ -25,13 +25,14 @@ async def process_shop_zone_sqs_event(
     """
     Send each detection to SQS. No DB rules, debounce, or time-window checks.
     """
-    rule_code = "zone_entry" if position == "in" else "zone_exit"
     camera_id = os.getenv("LOGIC_CAMERA_ID", "")
     processed = 0
+    
 
     for det in payload.detections:
+        logger.info(f"Payload for SQS: {det}")
         send_detection_to_sqs(
-            rule_code=rule_code,
+            rule_code=f"zoneshop {position}",
             member_id=det.person_id or "",
             camera_id=camera_id,
             detected_at=payload.timestamp,
@@ -46,6 +47,6 @@ async def process_shop_zone_sqs_event(
         processed += 1
 
     logger.info(
-        f"[SHOP ZONE] rule_code={rule_code} processed={processed} camera_id={camera_id or '(empty)'}"
+        f"[SHOP ZONE] processed={processed} camera_id={camera_id or '(empty)'} member_id={member_id} object_attr={object_attributes}"
     )
     return {"processed": processed}
