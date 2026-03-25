@@ -138,7 +138,6 @@ async def _send_sqs_for_rule(
     send_detection_to_sqs(
         rule_code=rule_code,
         member_id=member_id,
-        camera_id=rule.get("camera_id", ""),
         detected_at=detected_at,
         detection_image_url=detection_image_url,
         confidence=confidence,

@@ -12,12 +12,52 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Device identity (camera_id)
+# ---------------------------------------------------------------------------
+_DEVICE_ENV_PATH = Path("/etc/device/device.env")
+_cached_device_id: str | None = None
+
+
+def _get_device_id_from_env_file() -> str:
+    """
+    Read DEVICE_ID from /etc/device/device.env.
+
+    Format example:
+        DEVICE_ID=...
+        BACKEND_URL=...
+        SECRET_KEY=...
+    """
+    global _cached_device_id
+    if _cached_device_id is not None:
+        return _cached_device_id
+
+    try:
+        text = _DEVICE_ENV_PATH.read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("DEVICE_ID="):
+                _cached_device_id = line.split("=", 1)[1].strip()
+                return _cached_device_id
+    except FileNotFoundError:
+        logger.warning(f"Device env file not found at {_DEVICE_ENV_PATH} — camera_id may be empty")
+    except PermissionError:
+        logger.warning(f"No permission to read {_DEVICE_ENV_PATH} — camera_id may be empty")
+    except Exception as exc:
+        logger.warning(f"Failed reading {_DEVICE_ENV_PATH}: {exc}")
+
+    _cached_device_id = ""
+    return _cached_device_id
 
 # ---------------------------------------------------------------------------
 # SQS client (lazy-initialised)
@@ -61,7 +101,6 @@ def _get_queue_url() -> str:
 def send_detection_to_sqs(
     rule_code: str,
     member_id: str,
-    camera_id: str,
     detected_at: float,
     detection_image_url: str | None,
     confidence: float | None,
@@ -88,10 +127,12 @@ def send_detection_to_sqs(
     # Convert Unix timestamp to ISO-8601 string
     detected_at_iso = datetime.fromtimestamp(detected_at, tz=timezone.utc).isoformat()
 
+    resolved_camera_id = _get_device_id_from_env_file() or ""
+
     message_body = {
         "rule_code": rule_code,
         "member_id": member_id or "",
-        "camera_id": camera_id or "",
+        "camera_id": resolved_camera_id,
         "detected_at": detected_at_iso,
         "detection_image_url": detection_image_url or "",
         "confidence": confidence,
@@ -105,7 +146,7 @@ def send_detection_to_sqs(
         )
         message_id = response.get("MessageId", "?")
         logger.info(
-            f"[SQS] Sent rule_code={rule_code} camera_id={camera_id} "
+            f"[SQS] Sent rule_code={rule_code} camera_id={resolved_camera_id} "
             f"member_id={member_id} → MessageId={message_id}"
         )
         return True
