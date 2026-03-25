@@ -35,6 +35,7 @@ from database.connection import close_db, get_db, init_db
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.rule_engine import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
+from services.shop_zone_alert import process_shop_zone_sqs_event
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,42 +100,10 @@ async def _zmq_subscriber_loop() -> None:
                 elif topic == ZMQ_ANIMAL_TOPIC:
                     payload = AnimalAlertPayload.model_validate_json(raw)
                     result = await process_animal_alert(payload, db)
-                elif topic == ZMQ_ZONE_ENTRY_TOPIC:
-                    data = json.loads(raw)
-                    timestamp = data.get("timestamp")
-                    for det in data.get("detections", []):
-                        person_id = det.get("person_id", "Unknown")
-                        age = det.get("age")
-                        gender = det.get("gender")
-                        confidence = det.get("confidence")
-                        track_id = det.get("track_id")
-                        detection_result = det.get("detection_result")
-                        logger.info(
-                            f"Zone entry: track={track_id} person={person_id} "
-                            f"age={age} gender={gender} confidence={confidence} "
-                            f"detection_result={detection_result} timestamp={timestamp}"
-                        )
-                    continue
-                elif topic == ZMQ_ZONE_EXIT_TOPIC:
-                    data = json.loads(raw)
-                    timestamp = data.get("timestamp")
-                    for det in data.get("detections", []):
-                        person_id = det.get("person_id", "Unknown")
-                        age = det.get("age")
-                        gender = det.get("gender")
-                        confidence = det.get("confidence")
-                        track_id = det.get("track_id")
-                        detection_result = det.get("detection_result")
-                        logger.info(
-                            f"Zone exit: track={track_id} person={person_id} "
-                            f"age={age} gender={gender} confidence={confidence} "
-                            f"detection_result={detection_result} timestamp={timestamp}"
-                        )
-                    continue
-                elif topic == ZMQ_PERSON_COUNT_TOPIC:
-                    data = json.loads(raw)
-                    logger.info(f"Person count changed: {data.get('person_count')}")
-                    continue
+                elif topic in (ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC):
+                    payload = ShopPersonEventPayload.model_validate_json(raw)
+                    position = "in" if topic == ZMQ_ZONE_ENTRY_TOPIC else "out"
+                    result = await process_shop_zone_sqs_event(payload, position)
                 else:
                     logger.warning(f"Unknown ZMQ topic: {topic}")
                     continue
