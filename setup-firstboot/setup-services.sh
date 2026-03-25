@@ -80,6 +80,7 @@ ENVEOF
     fi
 fi
 chmod 600 /etc/device/device.env
+chmod a+r /etc/device/device.env
 
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
