@@ -116,9 +116,8 @@ class BasePipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
-        # Initialize ZMQ publisher
-        from .zmq_publisher import ZMQPublisher
-        self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+        # ZMQ publisher disabled (SHM-only runtime, no tcp://*:5555 bind)
+        self.zmq_publisher = None
         self._prev_person_count: int = -1
 
         # Initialize detection image saver
@@ -164,6 +163,8 @@ class BasePipeline:
         print(f"Device: {config.device}")
         if config.video_source_type == "zmq":
             print(f"Source: ZMQ ({config.zmq_video_endpoint})")
+        elif config.video_source_type == "shm":
+            print(f"Source: SHM ({config.shm_video_name})")
         else:
             print(f"Source: {config.source}")
         print(f"Known faces: {config.known_dir}")
@@ -172,6 +173,7 @@ class BasePipeline:
         print(f"Age/Gender detection: {'Enabled' if config.age_gender_enabled else 'Disabled'}")
         print(f"PPE detection (helmet/glove): {'Enabled' if config.ppe_detection_enabled else 'Disabled'}")
         print(f"Detection zone: {'Active' if config.detection_zone else 'Full frame'}")
+        print(f"Display window: {'Enabled' if config.display_enabled else 'Disabled (headless)'}")
         print("-" * 60)
 
     # ------------------------------------------------------------------
@@ -225,6 +227,17 @@ class BasePipeline:
             print(f"[Pipeline] Opening ZMQ video source: {endpoint} (timeout={timeout}ms)")
             return ZMQVideoSource(
                 endpoint=endpoint,
+                recv_timeout_ms=timeout,
+            )
+
+        if self.config.video_source_type == "shm":
+            from .shm_video_source import SharedMemoryVideoSource
+
+            name = self.config.shm_video_name
+            timeout = self.config.zmq_recv_timeout_ms
+            print(f"[Pipeline] Opening SHM video source: {name} (timeout={timeout}ms)")
+            return SharedMemoryVideoSource(
+                shm_name=name,
                 recv_timeout_ms=timeout,
             )
 
@@ -356,7 +369,7 @@ class BasePipeline:
         frame = draw_info_overlay(frame, fps, current_person_count, queue_info)
 
         # Publish person count change via ZMQ
-        if current_person_count != self._prev_person_count:
+        if self.zmq_publisher is not None and current_person_count != self._prev_person_count:
             self.zmq_publisher.send_person_count({
                 "timestamp": time.time(),
                 "person_count": current_person_count,
@@ -409,10 +422,17 @@ class BasePipeline:
         cap = self._open_video_source()
 
         if not cap.isOpened():
-            self.recognition_worker.stop()
-            raise RuntimeError(f"Failed to open video source: {self.config.source}")
+            # SHM source may start before writer exists; read() handles auto-reconnect.
+            if self.config.video_source_type == "shm":
+                print("[Pipeline] SHM source not attached yet, waiting for writer...")
+            else:
+                self.recognition_worker.stop()
+                raise RuntimeError(f"Failed to open video source: {self.config.source}")
 
-        print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        if self.config.display_enabled:
+            print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        else:
+            print("\n[Pipeline] Running in headless mode (no OpenCV window)\n")
 
         frame_count = 0
         try:
@@ -420,8 +440,8 @@ class BasePipeline:
                 ret, frame = cap.read()
 
                 if not ret:
-                    # ZMQ source: False = timeout/reconnecting, keep waiting
-                    if self.config.video_source_type == "zmq":
+                    # ZMQ / SHM: False = timeout, keep waiting
+                    if self.config.video_source_type in ("zmq", "shm"):
                         continue
                     # Camera index: might be temporary, retry
                     if self.config.source.isdigit():
@@ -435,18 +455,19 @@ class BasePipeline:
                 # Process frame (detection in main thread, recognition in worker)
                 annotated_frame = self._process_frame(frame)
 
-                # Display
-                cv2.imshow("Face Recognition", annotated_frame)
+                if self.config.display_enabled:
+                    # Display
+                    cv2.imshow("Face Recognition", annotated_frame)
 
-                # Handle keyboard events
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
-                    print("[Pipeline] Quit requested")
-                    break
-                elif key == ord("r"):
-                    print("\n[Pipeline] Refreshing face database...")
-                    self._load_known_faces(force_refresh=True)
-                    print("[Pipeline] Database refreshed\n")
+                    # Handle keyboard events
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        print("[Pipeline] Quit requested")
+                        break
+                    elif key == ord("r"):
+                        print("\n[Pipeline] Refreshing face database...")
+                        self._load_known_faces(force_refresh=True)
+                        print("[Pipeline] Database refreshed\n")
 
         except KeyboardInterrupt:
             print("\n[Pipeline] Interrupted by user")
@@ -454,7 +475,8 @@ class BasePipeline:
         finally:
             self.recognition_worker.stop()
             cap.release()
-            cv2.destroyAllWindows()
+            if self.config.display_enabled:
+                cv2.destroyAllWindows()
             if self.zmq_publisher is not None:
                 self.zmq_publisher.close()
             print(f"[Pipeline] Stopped after {frame_count} frames")

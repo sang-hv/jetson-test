@@ -96,13 +96,17 @@ class Config:
     # Tracker type (loaded from .env): "bytetrack", "botsort", "botsort_reid"
     tracker_type: str = "bytetrack"
 
-    # Video source type (loaded from .env): "opencv" or "zmq"
+    # Video source type (loaded from .env): "opencv", "zmq", or "shm"
     video_source_type: str = "opencv"
     zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
     zmq_recv_timeout_ms: int = 2000
+    # Shared-memory mmap file (raw BGR from start-stream.py; must match STREAM_SHM_PATH)
+    shm_video_name: str = "/dev/shm/mini_pc_ai_frames.bin"
 
     # Detection image saving directory
     detection_image_dir: str = "detection"
+    # Show OpenCV GUI window (set false for SSH/headless runtime)
+    display_enabled: bool = True
 
     # Detection zone: restrict YOLO inference to this rectangle (normalized coords)
     # Loaded from DB (detection_zones, code='detection')
@@ -211,9 +215,14 @@ class Config:
         video_source_type = env_vars.get("VIDEO_SOURCE_TYPE", "opencv").lower()
         zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
         zmq_recv_timeout_ms = int(env_vars.get("ZMQ_RECV_TIMEOUT_MS", "2000"))
+        shm_video_name = env_vars.get(
+            "SHM_VIDEO_PATH",
+            env_vars.get("SHM_VIDEO_NAME", "/dev/shm/mini_pc_ai_frames.bin"),
+        )
 
         # Parse detection image directory from .env
         detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")
+        display_enabled = env_vars.get("DISPLAY_ENABLED", "true").lower() == "true"
 
         # Parse pipeline type from .env
         pipeline_type = env_vars.get("PIPELINE_TYPE", "home").lower()
@@ -263,8 +272,10 @@ class Config:
             video_source_type=video_source_type,
             zmq_video_endpoint=zmq_video_endpoint,
             zmq_recv_timeout_ms=zmq_recv_timeout_ms,
+            shm_video_name=shm_video_name,
             # Detection image saving
             detection_image_dir=detection_image_dir,
+            display_enabled=display_enabled,
             # Detection zone from DB
             detection_zone=detection_zone,
             # Pipeline type from .env
@@ -294,6 +305,10 @@ class Config:
             raise ValueError(f"recognize_interval_ms must be >= 0")
         if self.pipeline_type not in ("home", "shop"):
             raise ValueError(f"pipeline_type must be 'home' or 'shop', got {self.pipeline_type}")
+        if self.video_source_type not in ("opencv", "zmq", "shm"):
+            raise ValueError(
+                f"video_source_type must be opencv, zmq, or shm, got {self.video_source_type}"
+            )
 
 
 def create_pipeline(config: Config):
