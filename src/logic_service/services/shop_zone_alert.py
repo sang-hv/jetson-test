@@ -30,7 +30,6 @@ async def process_shop_zone_sqs_event(
     
 
     for det in payload.detections:
-        logger.info(f"Payload for SQS: {det}")
         send_detection_to_sqs(
             rule_code=f"zoneshop {position}",
             member_id=det.person_id or "",
@@ -47,6 +46,6 @@ async def process_shop_zone_sqs_event(
         processed += 1
 
     logger.info(
-        f"[SHOP ZONE] processed={processed} camera_id={camera_id or '(empty)'} member_id={member_id} object_attr={object_attributes}"
+        f"[SHOP ZONE] processed={processed} camera_id={camera_id or '(empty)'}"
     )
     return {"processed": processed}
