@@ -32,7 +32,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from database.connection import close_db, get_db, init_db
-from schemas.event_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
+from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
+from schemas.shop_models import ShopPersonEventPayload
 from services.rule_engine import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
 
 logging.basicConfig(
