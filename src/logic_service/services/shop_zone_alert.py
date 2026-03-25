@@ -1,0 +1,51 @@
+"""
+Shop zone entry/exit: push detections to SQS with no rule or time-window checks.
+
+Field mapping matches `send_detection_to_sqs` usage in `rule_engine` (member_id from
+person_id, detection_image_url from detection_result, etc.). Camera id is taken from
+`LOGIC_CAMERA_ID` when not resolved via ai_rules.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Literal
+
+from schemas.shop_models import ShopPersonEventPayload
+from services.sqs_sender import send_detection_to_sqs
+
+logger = logging.getLogger(__name__)
+
+
+async def process_shop_zone_sqs_event(
+    payload: ShopPersonEventPayload,
+    position: Literal["in", "out"],
+) -> dict:
+    """
+    Send each detection to SQS. No DB rules, debounce, or time-window checks.
+    """
+    rule_code = "zone_entry" if position == "in" else "zone_exit"
+    camera_id = os.getenv("LOGIC_CAMERA_ID", "")
+    processed = 0
+
+    for det in payload.detections:
+        send_detection_to_sqs(
+            rule_code=rule_code,
+            member_id=det.person_id or "",
+            camera_id=camera_id,
+            detected_at=payload.timestamp,
+            detection_image_url=det.detection_result,
+            confidence=det.confidence,
+            object_attributes={
+                "gender": det.gender,
+                "age": det.age,
+                "position": position,
+            },
+        )
+        processed += 1
+
+    logger.info(
+        f"[SHOP ZONE] rule_code={rule_code} processed={processed} camera_id={camera_id or '(empty)'}"
+    )
+    return {"processed": processed}
