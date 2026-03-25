@@ -276,14 +276,35 @@ class BasePipeline:
         person: TrackedPerson,
         padding: float = 0.1,
     ) -> Optional[np.ndarray]:
-        """Extract person region from frame with padding."""
-        crop = crop_with_padding(frame, person.bbox, padding=padding)
+        """Extract head/upper region from person bbox for face recognition.
 
-        # Skip if crop is too small for reliable face detection
-        if crop.shape[0] < 50 or crop.shape[1] < 30:
+        Takes top 35% of bbox height (head region) with padding and clamps to
+        frame boundaries. Clamping handles close-up persons whose head is
+        partially out of frame — the face region remains visible.
+        """
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = person.bbox.astype(int)
+        w = x2 - x1
+        h = y2 - y1
+
+        # Estimate head region: top 35% of person bbox height
+        head_h = h * 0.35
+
+        # Padding: horizontal = 20% of person width, vertical = 30% of head height
+        pad_x = int(w * 0.20)
+        pad_y = int(head_h * 0.30)
+
+        # Crop coordinates — clamp to frame boundary
+        # Extending upward (y1 - pad_y) handles close-up where head starts at/above frame top
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(fw, x2 + pad_x)
+        cy2 = min(fh, int(y1 + head_h + pad_y))
+
+        if cx2 - cx1 < 30 or cy2 - cy1 < 30:
             return None
 
-        return crop
+        return frame[cy1:cy2, cx1:cx2].copy()
 
     def _detect(
         self, frame: np.ndarray

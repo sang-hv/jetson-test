@@ -122,6 +122,7 @@ async def _zmq_subscriber_loop() -> None:
                     elif topic == ZMQ_ANIMAL_TOPIC:
                         payload = AnimalAlertPayload.model_validate_json(raw)
                         result = await process_animal_alert(payload, db)
+                    
                         handled = True
                     elif topic in (ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC):
                         # Store-only topics — ignore for Family cameras.
