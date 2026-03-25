@@ -73,10 +73,36 @@ class ShopPipeline(BasePipeline):
 
         self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
 
-        # Cleanup lost tracks to free ZoneCounter internal state
-        self.counter.process_lost_tracks(
+        # Cleanup lost tracks and detect zone exits
+        crossings, _ = self.counter.process_lost_tracks(
             list(active_ids), self._frame_count, self.config.counting_cleanup_max_age
         )
+
+        # Notify when a known person exits (IN → OUT)
+        if crossings and self.zmq_publisher is not None:
+            exit_detections = []
+            for c in crossings:
+                if c.direction != "out":
+                    continue
+                if c.person_id == "Unknown" or c.person_id.endswith("?"):
+                    continue
+                detection_result = None
+                if c.frame is not None and c.bbox is not None:
+                    detection_result = self.detection_saver.save_frame_with_box(
+                        c.frame, c.bbox, "zone_exit", c.track_id, c.person_id,
+                    )
+                exit_detections.append({
+                    "track_id": c.track_id,
+                    "person_id": c.person_id,
+                    "age": c.age,
+                    "gender": c.gender,
+                    "detection_result": detection_result,
+                })
+            if exit_detections:
+                self.zmq_publisher.send_zone_exit({
+                    "timestamp": time.time(),
+                    "detections": exit_detections,
+                })
 
         # Detect new entries into IN zone
         in_zone_tracks = self.counter.get_tracks_in_zone("in")
