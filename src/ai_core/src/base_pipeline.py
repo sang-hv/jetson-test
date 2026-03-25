@@ -116,8 +116,9 @@ class BasePipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
-        # ZMQ publisher disabled (SHM-only runtime, no tcp://*:5555 bind)
-        self.zmq_publisher = None
+        # ZMQ publisher for broadcasting events to Logic Service
+        from .zmq_publisher import ZMQPublisher
+        self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
         self._prev_person_count: int = -1
 
         # Initialize detection image saver
