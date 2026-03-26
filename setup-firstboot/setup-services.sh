@@ -118,8 +118,8 @@ else
     warn "Cloudflared installed — tunnel will be configured after sync-config runs"
 fi
 
-step "Phase 4/7: backchannel and person-count ws"
-mkdir -p /opt/backchannel /opt/person_count_ws
+step "Phase 4/7: backchannel, person-count ws, and stream-auth"
+mkdir -p /opt/backchannel /opt/person_count_ws /opt/stream_auth
 cp "$SCRIPT_DIR/backchannel/server.py" /opt/backchannel/server.py
 cp "$SCRIPT_DIR/backchannel/start.sh" /opt/backchannel/start.sh
 chmod +x /opt/backchannel/start.sh
@@ -128,15 +128,18 @@ cp "$SCRIPT_DIR/person_count_ws/server.py" /opt/person_count_ws/server.py
 cp "$SCRIPT_DIR/person_count_ws/start.sh" /opt/person_count_ws/start.sh
 chmod +x /opt/person_count_ws/start.sh
 
+cp "$SCRIPT_DIR/stream_auth/server.py" /opt/stream_auth/server.py
+
 pip3 install websockets pyzmq 2>&1 | tail -3 | tee -a "$LOG_FILE"
 
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
     > /etc/systemd/system/backchannel.service
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/person-count-ws.service" \
     > /etc/systemd/system/person-count-ws.service
+cp "$SCRIPT_DIR/services/stream-auth.service" /etc/systemd/system/stream-auth.service
 systemctl daemon-reload
-systemctl enable backchannel.service person-count-ws.service
-log "Backchannel + person-count ws configured"
+systemctl enable backchannel.service person-count-ws.service stream-auth.service
+log "Backchannel + person-count ws + stream-auth configured"
 
 step "Phase 5/7: nginx reverse proxy"
 cp "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/go2rtc
@@ -199,6 +202,7 @@ echo "  Services:"
 echo "    go2rtc          → sudo systemctl status go2rtc"
 echo "    backchannel     → sudo systemctl status backchannel"
 echo "    person-count-ws → sudo systemctl status person-count-ws"
+echo "    stream-auth     → sudo systemctl status stream-auth"
 echo "    cloudflared     → sudo systemctl status cloudflared"
 echo "    nginx           → sudo systemctl status nginx"
 echo "    audio-auto      → systemctl --user status audio-autostart"
