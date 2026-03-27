@@ -88,8 +88,8 @@ def main() -> None:
         print(fail(f"Decode failed: {e}"))
         sys.exit(1)
 
-    payload   = token_data.get("payload", {})
-    sig_b64   = token_data.get("signature", "")
+    payload      = token_data.get("payload", {})
+    received_hex = token_data.get("signature", "")
 
     print()
     print(f"{BOLD}Payload:{RESET}")
@@ -97,8 +97,8 @@ def main() -> None:
         print(f"  {info(k):30s} {v}")
 
     print()
-    print(f"{BOLD}Signature:{RESET}")
-    print(f"  received (from token) : {sig_b64}")
+    print(f"{BOLD}Signature (hex):{RESET}")
+    print(f"  received (from token) : {received_hex}")
 
     # ── 2. HMAC verify ────────────────────────────────────────────────────────
     print()
@@ -109,18 +109,16 @@ def main() -> None:
         print(warn("secret_key is empty — skipping HMAC check"))
     else:
         try:
-            received_sig = base64.b64decode(sig_b64)
             message = json.dumps(payload, sort_keys=True).encode("utf-8")
             print(f"  message signed        : {message.decode()}")
-            expected_sig = hmac.new(
+            expected_hex = hmac.new(
                 secret_key.encode("utf-8"),
                 message,
                 hashlib.sha256,
-            ).digest()
-            expected_b64 = base64.b64encode(expected_sig).decode()
-            print(f"  expected (by device)  : {expected_b64}")
-            print(f"  match                 : {'YES' if hmac.compare_digest(received_sig, expected_sig) else 'NO'}")
-            if hmac.compare_digest(received_sig, expected_sig):
+            ).hexdigest()
+            print(f"  expected (by device)  : {expected_hex}  [key={secret_key}]")
+            print(f"  match                 : {'YES' if hmac.compare_digest(received_hex, expected_hex) else 'NO'}")
+            if hmac.compare_digest(received_hex, expected_hex):
                 print(ok("HMAC signature valid"))
             else:
                 print(fail("HMAC signature INVALID"))

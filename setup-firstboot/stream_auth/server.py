@@ -160,8 +160,7 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
 
     try:
         payload: dict = token_data["payload"]
-        sig_b64: str = token_data["signature"]
-        received_sig = base64.b64decode(sig_b64)
+        received_hex: str = token_data["signature"]
     except (KeyError, Exception):
         result = (401, "token structure invalid")
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
@@ -170,17 +169,17 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
     # --- 2. Verify HMAC-SHA256 ---
     try:
         message = json.dumps(payload, sort_keys=True).encode("utf-8")
-        expected_sig = hmac.new(
+        expected_hex = hmac.new(
             secret_key.encode("utf-8"),
             message,
             hashlib.sha256,
-        ).digest()
+        ).hexdigest()
     except Exception:
         result = (401, "hmac computation error")
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
         return result
 
-    if not hmac.compare_digest(received_sig, expected_sig):
+    if not hmac.compare_digest(received_hex, expected_hex):
         result = (401, "invalid signature")
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
         return result
