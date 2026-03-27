@@ -8,7 +8,7 @@ domain-specific logic (counting, alerts, etc.) without duplicating the core loop
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -120,6 +120,9 @@ class BasePipeline:
         from .zmq_publisher import ZMQPublisher
         self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
         self._prev_person_count: int = -1
+        # Mask alert cooldown: track_id -> last alert timestamp
+        self._mask_alert_last_notified: Dict[int, float] = {}
+        self._mask_alert_cooldown: float = 30.0  # seconds between repeated alerts per track
 
         # Initialize detection image saver
         from .detection_saver import DetectionImageSaver
@@ -365,6 +368,62 @@ class BasePipeline:
                     self.recognition_worker.submit(task)
                     self.track_manager.mark_recognition_submitted(track_id)
 
+    def _check_mask_alerts(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Send ZMQ mask_alert when a confirmed no-mask person is detected in ROI."""
+        if self.mask_detector is None or self.zmq_publisher is None:
+            return
+
+        now = time.time()
+        no_mask_detections = []
+
+        for person in tracked_persons:
+            tid = person.track_id
+            mask_status = self.track_manager.get_mask_status(tid)
+
+            # Only alert when mask status is confirmed False (not wearing mask)
+            if mask_status is not False:
+                continue
+
+            # Apply per-track cooldown to avoid message flooding
+            elapsed = now - self._mask_alert_last_notified.get(tid, 0.0)
+            if elapsed < self._mask_alert_cooldown:
+                continue
+
+            self._mask_alert_last_notified[tid] = now
+
+            label = self.track_manager.get_label(tid)
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_info = self.track_manager.get_track_info(tid)
+            confidence = track_info.get("avg_score") if track_info else None
+
+            detection_result = self.detection_saver.save_frame_with_box(
+                frame, person.bbox, "mask_alert", tid, label
+            )
+
+            no_mask_detections.append({
+                "track_id": tid,
+                "person_id": label,
+                "age": age,
+                "gender": gender,
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        if no_mask_detections:
+            self.zmq_publisher.send_mask_alert({
+                "timestamp": now,
+                "detections": no_mask_detections,
+            })
+
+        # Purge stale cooldown entries for tracks no longer in frame
+        active_ids = {p.track_id for p in tracked_persons}
+        self._mask_alert_last_notified = {
+            tid: t for tid, t in self._mask_alert_last_notified.items()
+            if tid in active_ids
+        }
+
     def _draw_person(self, frame: np.ndarray, person: TrackedPerson) -> np.ndarray:
         """Draw a single tracked person with all attributes."""
         label = self.track_manager.get_label(person.track_id)
@@ -410,6 +469,9 @@ class BasePipeline:
 
         # 2. Hook: post-detection processing (counting, alerts)
         self._on_detections(tracked_persons, tracked_animals, frame)
+
+        # 2b. Mask alert: notify logic service when someone in ROI is not wearing mask
+        self._check_mask_alerts(tracked_persons, frame)
 
         # 3. Submit recognition tasks to worker queue (non-blocking)
         self._submit_recognition_tasks(tracked_persons, frame)

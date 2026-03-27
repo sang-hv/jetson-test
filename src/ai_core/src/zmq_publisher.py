@@ -37,6 +37,9 @@ class ZMQPublisher:
     # enterprise topics
     EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
 
+    # mask alert topic
+    MASK_ALERT_TOPIC = b"mask_alert"
+
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
@@ -128,6 +131,16 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher employee crossing send failed: {exc}")
+
+    def send_mask_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the mask_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.MASK_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher mask alert send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""
