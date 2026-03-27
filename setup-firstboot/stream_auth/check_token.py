@@ -103,6 +103,7 @@ def main() -> None:
     # ── 2. HMAC verify ────────────────────────────────────────────────────────
     print()
     print(f"{BOLD}Checks:{RESET}")
+    print(f"  secret_key used       : {secret_key!r}")
 
     if not secret_key:
         print(warn("secret_key is empty — skipping HMAC check"))
@@ -110,6 +111,7 @@ def main() -> None:
         try:
             received_sig = base64.b64decode(sig_b64)
             message = json.dumps(payload, sort_keys=True).encode("utf-8")
+            print(f"  message signed        : {message.decode()}")
             expected_sig = hmac.new(
                 secret_key.encode("utf-8"),
                 message,
