@@ -34,6 +34,9 @@ class ZMQPublisher:
     ZONE_ENTRY_TOPIC = b"zone_entry"
     ZONE_EXIT_TOPIC = b"zone_exit"
 
+    # enterprise topics
+    EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
+
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
@@ -115,6 +118,16 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher zone exit send failed: {exc}")
+
+    def send_employee_crossing(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the employee_crossing topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.EMPLOYEE_CROSSING_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher employee crossing send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""

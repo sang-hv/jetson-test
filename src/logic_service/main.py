@@ -32,6 +32,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from database.connection import close_db, get_db, init_db
+from schemas.enterprise_models import EmployeeCrossingPayload
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
@@ -54,6 +55,9 @@ ZMQ_PERSON_COUNT_TOPIC = b"person_count"
 ZMQ_ZONE_ENTRY_TOPIC = b"zone_entry"
 ZMQ_ZONE_EXIT_TOPIC = b"zone_exit"
 
+# enterprise topics
+ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
+
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
 _zmq_task: asyncio.Task | None = None
@@ -69,6 +73,19 @@ async def _get_camera_facility(db) -> str | None:
     )
     row = await cursor.fetchone()
     return row[0] if row is not None else None
+
+
+async def _process_employee_crossing(payload: EmployeeCrossingPayload) -> None:
+    """Log employee check-in / check-out events. No SQS, no rules engine."""
+    from datetime import datetime, timezone
+    for det in payload.detections:
+        action = "CHECKIN" if det.direction == "in" else "CHECKOUT"
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        conf_str = f"{det.confidence:.2f}" if det.confidence is not None else "?"
+        logger.info(
+            f"[ENTERPRISE] {dt} | {action} | employee={det.person_id} "
+            f"| track_id={det.track_id} | confidence={conf_str}"
+        )
 
 
 async def _zmq_subscriber_loop() -> None:
@@ -88,7 +105,8 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PERSON_COUNT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_ENTRY_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_EXIT_TOPIC)
-    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}, {ZMQ_ZONE_ENTRY_TOPIC.decode()}, {ZMQ_ZONE_EXIT_TOPIC.decode()}]")
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
+    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}, {ZMQ_ZONE_ENTRY_TOPIC.decode()}, {ZMQ_ZONE_EXIT_TOPIC.decode()}, {ZMQ_EMPLOYEE_CROSSING_TOPIC.decode()}]")
 
     try:
         while True:
@@ -139,10 +157,17 @@ async def _zmq_subscriber_loop() -> None:
                     else:
                         # Family-only topics — ignore for Store cameras.
                         handled = False
+                elif facility == "Enterprise":
+                    if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
+                        payload = EmployeeCrossingPayload.model_validate_json(raw)
+                        await _process_employee_crossing(payload)
+                        handled = True
+                    else:
+                        handled = False
                 else:
-                    # Only run Family/Store pipelines as requested.
+                    # Only run Family/Store/Enterprise pipelines as requested.
                     logger.warning(
-                        f"camera_settings.facility is not set to 'Family'/'Store' (got {facility!r}) — skipping"
+                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise' (got {facility!r}) — skipping"
                     )
                     continue
 

@@ -1,0 +1,145 @@
+"""
+Enterprise camera pipeline for employee check-in / check-out.
+
+Extends BasePipeline with:
+- Line crossing detection via ZoneCounter (same as HomePipeline)
+- ZMQ notification ONLY for recognized employees (person_id != "Unknown")
+- direction "in"  → checkin event
+- direction "out" → checkout event
+- Unknown persons are silently ignored — no message sent
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, Dict, List
+
+import numpy as np
+
+from .base_pipeline import BasePipeline
+from .detector import TrackedAnimal, TrackedPerson
+from .utils import (
+    compute_crop_score,
+    draw_counting_info,
+    draw_counting_line,
+    draw_in_zone_overlay,
+)
+
+if TYPE_CHECKING:
+    from .pipeline import Config
+
+
+class EnterprisePipeline(BasePipeline):
+    """Pipeline for enterprise cameras with employee check-in/check-out detection."""
+
+    def _init_extra_components(self) -> None:
+        config = self.config
+
+        self.counter = None
+        # Per-track cooldown to prevent duplicate events when a track oscillates
+        # at the line boundary or is briefly lost and regained.
+        self._employee_crossing_last_notified: Dict[int, float] = {}
+        self._employee_crossing_cooldown: float = 10.0  # seconds
+
+        if config.counting_enabled:
+            from .counter import ZoneCounter
+
+            self.counter = ZoneCounter(
+                line_start=config.counting_line_start,
+                line_end=config.counting_line_end,
+                in_direction_point=config.counting_in_direction_point,
+            )
+            print(f"[EnterprisePipeline] Employee crossing detection: Enabled (line {config.counting_line_start} -> {config.counting_line_end})")
+        else:
+            print("[EnterprisePipeline] Employee crossing detection: Disabled (set COUNTING_ENABLED=true)")
+
+    def _on_detections(
+        self,
+        tracked_persons: List[TrackedPerson],
+        tracked_animals: List[TrackedAnimal],
+        frame: np.ndarray,
+    ) -> None:
+        if self.counter is None:
+            return
+
+        active_ids = [p.track_id for p in tracked_persons]
+
+        track_infos = {}
+        track_scores = {}
+        for person in tracked_persons:
+            tid = person.track_id
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_infos[tid] = {
+                "person_id": self.track_manager.get_label(tid),
+                "age": age,
+                "gender": gender,
+            }
+            track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
+
+        self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
+
+        crossings, _ = self.counter.process_lost_tracks(
+            active_ids, self._frame_count, self.config.counting_cleanup_max_age
+        )
+
+        if crossings and self.zmq_publisher is not None:
+            self._publish_employee_crossings(crossings)
+
+        # Purge cooldown entries for tracks no longer active
+        active_set = set(active_ids)
+        self._employee_crossing_last_notified = {
+            tid: t for tid, t in self._employee_crossing_last_notified.items()
+            if tid in active_set
+        }
+
+    def _draw_extra_overlays(self, frame: np.ndarray) -> np.ndarray:
+        if self.counter is not None:
+            pt1, pt2 = self.counter.get_line_points_px(frame.shape)
+            in_pt = self.counter.get_in_direction_point_px(frame.shape)
+            frame = draw_in_zone_overlay(frame, pt1, pt2, in_pt)
+            frame = draw_counting_line(frame, pt1, pt2)
+            in_count, out_count = self.counter.get_counts()
+            frame = draw_counting_info(frame, in_count, out_count)
+        return frame
+
+    # ------------------------------------------------------------------
+    # Publish methods
+    # ------------------------------------------------------------------
+
+    def _publish_employee_crossings(self, crossings) -> None:
+        """Publish crossing events for recognized employees only."""
+        now = time.time()
+        detections = []
+
+        for c in crossings:
+            # Skip unknown persons — do not send any message
+            if c.person_id == "Unknown" or c.person_id.endswith("?"):
+                continue
+
+            # Skip if within cooldown window
+            elapsed = now - self._employee_crossing_last_notified.get(c.track_id, 0.0)
+            if elapsed < self._employee_crossing_cooldown:
+                continue
+
+            self._employee_crossing_last_notified[c.track_id] = now
+
+            detection_result = None
+            if c.frame is not None and c.bbox is not None:
+                detection_result = self.detection_saver.save_frame_with_box(
+                    c.frame, c.bbox, "employee_crossing", c.track_id, c.person_id,
+                )
+
+            track_info = self.track_manager.get_track_info(c.track_id)
+            confidence = track_info.get("avg_score") if track_info else None
+
+            detections.append({
+                "track_id": c.track_id,
+                "person_id": c.person_id,
+                "direction": c.direction,  # "in" = checkin, "out" = checkout
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        if detections:
+            payload = {"timestamp": time.time(), "detections": detections}
+            self.zmq_publisher.send_employee_crossing(payload)

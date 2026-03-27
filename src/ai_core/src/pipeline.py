@@ -303,8 +303,8 @@ class Config:
             raise ValueError(f"min_confirm_frames must be >= 1")
         if self.recognize_interval_ms < 0:
             raise ValueError(f"recognize_interval_ms must be >= 0")
-        if self.pipeline_type not in ("home", "shop"):
-            raise ValueError(f"pipeline_type must be 'home' or 'shop', got {self.pipeline_type}")
+        if self.pipeline_type not in ("home", "shop", "enterprise"):
+            raise ValueError(f"pipeline_type must be 'home', 'shop', or 'enterprise', got {self.pipeline_type}")
         if self.video_source_type not in ("opencv", "zmq", "shm"):
             raise ValueError(
                 f"video_source_type must be opencv, zmq, or shm, got {self.video_source_type}"
@@ -316,6 +316,9 @@ def create_pipeline(config: Config):
     if config.pipeline_type == "shop":
         from .shop_pipeline import ShopPipeline
         return ShopPipeline(config)
+    elif config.pipeline_type == "enterprise":
+        from .enterprise_pipeline import EnterprisePipeline
+        return EnterprisePipeline(config)
     else:
         from .home_pipeline import HomePipeline
         return HomePipeline(config)
