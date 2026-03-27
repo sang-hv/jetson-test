@@ -29,7 +29,7 @@ async def process_shop_zone_sqs_event(
 
     for det in payload.detections:
         send_detection_to_sqs(
-            rule_code="zone_entry" if position == "in" else "zone_exit",
+            rule_code="store",
             member_id=det.person_id or "",
             detected_at=payload.timestamp,
             detection_image_url=det.detection_result,
