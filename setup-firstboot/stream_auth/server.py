@@ -2,19 +2,19 @@
 """
 Stream Auth — Nginx auth_request backend.
 
-Validates the HMAC token passed as ?token=<base64url> on every protected
-request (livestream WebSocket, backchannel, detection WS).
+Token format (base64url-encoded JSON):
+  base64url({ "payload": { camera_id, start_time, time_exp, exp }, "signature": hexdigest })
 
-Validation steps:
-  1. Decode base64url token → {payload, signature}
-  2. Recompute HMAC-SHA256(json.dumps(payload, sort_keys=True), secret_key)
-  3. Compare with stored signature (constant-time)
-  4. Check payload.camera_id == DEVICE_ID from /etc/device/device.env
-  5. Check payload.time_exp has not passed (timezone-aware)
+Validation:
+  1. base64url-decode token → extract payload + signature
+  2. Recompute HMAC-SHA256(json.dumps(payload, sort_keys=True), secret_key).hexdigest()
+  3. Compare signatures (constant-time)
+  4. Check payload.camera_id == DEVICE_ID
+  5. Check payload.time_exp has not passed
 
 Responds:
-  200 OK          — token valid, Nginx forwards request
-  401 Unauthorized — token missing / expired / bad signature
+  200 OK           — token valid
+  401 Unauthorized — missing / expired / invalid signature
   403 Forbidden    — camera_id mismatch
 
 Usage: python3 server.py [--port 8091]
@@ -30,7 +30,6 @@ import json
 import logging
 import os
 import sqlite3
-import sys
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,7 +44,7 @@ log = logging.getLogger("stream-auth")
 DB_PATH = os.getenv("AUTH_DB_PATH", "/data/mini-pc/db/logic_service.db")
 DEVICE_ENV_PATH = os.getenv("DEVICE_ENV_PATH", "/etc/device/device.env")
 
-# TTL (seconds) for caching denied results (bad sig / camera mismatch).
+# TTL (seconds) for caching denied results.
 # Valid tokens are cached until their own time_exp.
 DENY_CACHE_TTL = int(os.getenv("DENY_CACHE_TTL", "60"))
 
@@ -55,43 +54,27 @@ DENY_CACHE_TTL = int(os.getenv("DENY_CACHE_TTL", "60"))
 # ---------------------------------------------------------------------------
 
 class _TokenCache:
-    """
-    Maps SHA256(token) → (status, reason, expires_at).
-
-    - Valid tokens   : cached until payload time_exp
-    - Denied tokens  : cached for DENY_CACHE_TTL seconds
-    - Expired entries are pruned lazily on every get/set
-    """
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # key: str (hex digest)  →  value: (status: int, reason: str, expires_at: float)
         self._store: dict[str, tuple[int, str, float]] = {}
         self._set_count = 0
 
-    @staticmethod
-    def _key(token: str) -> str:
-        return hashlib.sha256(token.encode()).hexdigest()
-
     def get(self, token: str) -> tuple[int, str] | None:
-        key = self._key(token)
         now = datetime.now(tz=timezone.utc).timestamp()
         with self._lock:
-            entry = self._store.get(key)
+            entry = self._store.get(token)
             if entry is None:
                 return None
             status, reason, expires_at = entry
             if now > expires_at:
-                del self._store[key]
+                del self._store[token]
                 return None
             return status, reason
 
     def set(self, token: str, status: int, reason: str, expires_at: float) -> None:
-        key = self._key(token)
         with self._lock:
-            self._store[key] = (status, reason, expires_at)
+            self._store[token] = (status, reason, expires_at)
             self._set_count += 1
-            # Prune expired entries every 200 insertions
             if self._set_count % 200 == 0:
                 now = datetime.now(tz=timezone.utc).timestamp()
                 self._store = {k: v for k, v in self._store.items() if v[2] > now}
@@ -101,11 +84,10 @@ _cache = _TokenCache()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Loaders
 # ---------------------------------------------------------------------------
 
 def _load_device_id() -> str:
-    """Read DEVICE_ID from /etc/device/device.env."""
     try:
         with open(DEVICE_ENV_PATH) as f:
             for line in f:
@@ -120,53 +102,43 @@ def _load_device_id() -> str:
 
 
 def _load_secret_key() -> str:
-    """Read stream_secret_key from SQLite DB."""
     try:
         db = sqlite3.connect(DB_PATH, check_same_thread=False)
         row = db.execute(
             "SELECT value FROM camera_settings WHERE key = 'stream_secret_key' LIMIT 1"
         ).fetchone()
         db.close()
-        if row:
-            return row[0]
+        return row[0] if row else ""
     except Exception as exc:
         log.error("Cannot read secret key from DB: %s", exc)
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
 def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, str]:
-    """
-    Returns (http_status_code, reason).
-    Results are cached:
-      - 200 until token's own time_exp
-      - 401/403 for DENY_CACHE_TTL seconds
-    """
-    # --- Cache lookup ---
+    """Returns (http_status_code, reason). Results are cached."""
     cached = _cache.get(token)
     if cached is not None:
         return cached
 
     now = datetime.now(tz=timezone.utc)
 
-    # --- 1. Decode base64url (add padding as needed) ---
+    # --- 1. Decode base64url ---
     try:
         padding = 4 - len(token) % 4
         raw = base64.urlsafe_b64decode(token + "=" * (padding % 4))
         token_data = json.loads(raw)
+        payload: dict = token_data["payload"]
+        received_hex: str = token_data["signature"]
     except Exception:
         result = (401, "token decode error")
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
         return result
 
-    try:
-        payload: dict = token_data["payload"]
-        received_hex: str = token_data["signature"]
-    except (KeyError, Exception):
-        result = (401, "token structure invalid")
-        _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
-        return result
-
-    # --- 2. Verify HMAC-SHA256 ---
+    # --- 2. Recompute HMAC ---
     try:
         message = json.dumps(payload, sort_keys=True).encode("utf-8")
         expected_hex = hmac.new(
@@ -197,16 +169,14 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
         if time_exp.tzinfo is None:
             time_exp = time_exp.replace(tzinfo=timezone.utc)
         if now > time_exp:
-            # Expired — do NOT cache, let client retry with fresh token
             return 401, f"token expired at {time_exp_str}"
+        # Valid — cache until time_exp
+        _cache.set(token, 200, "ok", time_exp.timestamp())
+        return 200, "ok"
     except (KeyError, ValueError) as exc:
         result = (401, f"time_exp parse error: {exc}")
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
         return result
-
-    # --- Valid: cache until time_exp ---
-    _cache.set(token, 200, "ok", time_exp.timestamp())
-    return 200, "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -214,17 +184,14 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
 # ---------------------------------------------------------------------------
 
 class AuthHandler(BaseHTTPRequestHandler):
-    # Populated by the server after startup
     device_id: str = ""
     secret_key: str = ""
 
-    def log_message(self, fmt: str, *args: object) -> None:  # suppress default access log
+    def log_message(self, fmt: str, *args: object) -> None:
         pass
 
     def do_GET(self) -> None:
-        # Nginx passes the original URI (including query string) via header
         original_uri = self.headers.get("X-Original-URI", self.path)
-
         try:
             qs = parse_qs(urlparse(original_uri).query)
             token_list = qs.get("token", [])
@@ -237,7 +204,6 @@ class AuthHandler(BaseHTTPRequestHandler):
 
         token = token_list[0]
         status, reason = _validate_token(token, self.device_id, self.secret_key)
-
         if status != 200:
             log.warning("Auth denied [%d] %s — %s", status, original_uri, reason)
         self._respond(status, reason)
@@ -258,7 +224,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.getenv("STREAM_AUTH_PORT", "8091")))
     args = parser.parse_args()
 
-    device_id = _load_device_id()
+    device_id  = _load_device_id()
     secret_key = _load_secret_key()
 
     if not device_id:
@@ -268,7 +234,7 @@ def main() -> None:
 
     log.info("device_id=%s  db=%s", device_id or "(empty)", DB_PATH)
 
-    AuthHandler.device_id = device_id
+    AuthHandler.device_id  = device_id
     AuthHandler.secret_key = secret_key
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), AuthHandler)

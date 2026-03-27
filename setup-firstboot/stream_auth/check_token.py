@@ -20,8 +20,6 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-
-# ── colour helpers ────────────────────────────────────────────────────────────
 GREEN  = "\033[32m"
 RED    = "\033[31m"
 YELLOW = "\033[33m"
@@ -34,8 +32,6 @@ fail = lambda s: f"{RED}✗ {s}{RESET}"
 warn = lambda s: f"{YELLOW}⚠ {s}{RESET}"
 info = lambda s: f"{CYAN}{s}{RESET}"
 
-
-# ── loaders ───────────────────────────────────────────────────────────────────
 
 def load_device_id(path="/etc/device/device.env") -> str:
     try:
@@ -56,24 +52,20 @@ def load_secret_key(db_path="/data/mini-pc/db/logic_service.db") -> str:
             "SELECT value FROM camera_settings WHERE key = 'stream_secret_key' LIMIT 1"
         ).fetchone()
         db.close()
-        if row:
-            return row[0]
+        return row[0] if row else ""
     except Exception as e:
         print(warn(f"Cannot read secret key from DB: {e}"))
     return ""
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Decode and verify a stream token")
     parser.add_argument("token", help="base64url token string")
-    parser.add_argument("--secret", default=None, help="HMAC secret key (overrides DB lookup)")
-    parser.add_argument("--device-id", default=None, help="Expected camera_id / DEVICE_ID (overrides device.env)")
+    parser.add_argument("--secret",    default=None, help="HMAC secret key (overrides DB lookup)")
+    parser.add_argument("--device-id", default=None, help="Expected camera_id (overrides device.env)")
     args = parser.parse_args()
 
-    token = args.token
-    secret_key = args.secret or load_secret_key()
+    secret_key = args.secret    or load_secret_key()
     device_id  = args.device_id or load_device_id()
 
     print()
@@ -81,15 +73,14 @@ def main() -> None:
 
     # ── 1. Decode ─────────────────────────────────────────────────────────────
     try:
-        padding = 4 - len(token) % 4
-        raw = base64.urlsafe_b64decode(token + "=" * (padding % 4))
+        padding = 4 - len(args.token) % 4
+        raw = base64.urlsafe_b64decode(args.token + "=" * (padding % 4))
         token_data = json.loads(raw)
+        payload      = token_data["payload"]
+        received_hex = token_data["signature"]
     except Exception as e:
         print(fail(f"Decode failed: {e}"))
         sys.exit(1)
-
-    payload      = token_data.get("payload", {})
-    received_hex = token_data.get("signature", "")
 
     print()
     print(f"{BOLD}Payload:{RESET}")
@@ -98,43 +89,40 @@ def main() -> None:
 
     print()
     print(f"{BOLD}Signature (hex):{RESET}")
-    print(f"  received (from token) : {received_hex}")
+    print(f"  received : {received_hex}")
 
     # ── 2. HMAC verify ────────────────────────────────────────────────────────
     print()
     print(f"{BOLD}Checks:{RESET}")
-    print(f"  secret_key used       : {secret_key!r}")
+    print(f"  secret_key : {secret_key!r}")
 
     if not secret_key:
         print(warn("secret_key is empty — skipping HMAC check"))
     else:
-        try:
-            message = json.dumps(payload, sort_keys=True).encode("utf-8")
-            print(f"  message signed        : {message.decode()}")
-            expected_hex = hmac.new(
-                secret_key.encode("utf-8"),
-                message,
-                hashlib.sha256,
-            ).hexdigest()
-            print(f"  expected (by device)  : {expected_hex}  [key={secret_key}]")
-            print(f"  match                 : {'YES' if hmac.compare_digest(received_hex, expected_hex) else 'NO'}")
-            if hmac.compare_digest(received_hex, expected_hex):
-                print(ok("HMAC signature valid"))
-            else:
-                print(fail("HMAC signature INVALID"))
-        except Exception as e:
-            print(fail(f"HMAC check error: {e}"))
+        message = json.dumps(payload, sort_keys=True).encode("utf-8")
+        print(f"  message    : {message.decode()}")
+        expected_hex = hmac.new(
+            secret_key.encode("utf-8"),
+            message,
+            hashlib.sha256,
+        ).hexdigest()
+        print(f"  expected   : {expected_hex}")
+        print(f"  match      : {'YES' if hmac.compare_digest(received_hex, expected_hex) else 'NO'}")
+        if hmac.compare_digest(received_hex, expected_hex):
+            print(ok("HMAC signature valid"))
+        else:
+            print(fail("HMAC signature INVALID"))
 
     # ── 3. camera_id ──────────────────────────────────────────────────────────
     token_camera_id = payload.get("camera_id", "")
     if not device_id:
-        print(warn("DEVICE_ID is empty — skipping camera_id check"))
+        print(warn("DEVICE_ID empty — skipping camera_id check"))
     elif token_camera_id == device_id:
         print(ok(f"camera_id matches: {token_camera_id}"))
     else:
-        print(fail(f"camera_id MISMATCH"))
-        print(f"  token    : {token_camera_id}")
-        print(f"  device   : {device_id}")
+        print(fail("camera_id MISMATCH"))
+        print(f"  token  : {token_camera_id}")
+        print(f"  device : {device_id}")
 
     # ── 4. Expiry ─────────────────────────────────────────────────────────────
     time_exp_str = payload.get("time_exp", "")
@@ -146,14 +134,14 @@ def main() -> None:
             if time_exp.tzinfo is None:
                 time_exp = time_exp.replace(tzinfo=timezone.utc)
             now = datetime.now(tz=timezone.utc)
-            remaining = time_exp - now
             if now <= time_exp:
-                mins = int(remaining.total_seconds() // 60)
-                secs = int(remaining.total_seconds() % 60)
-                print(ok(f"Token valid — expires in {mins}m {secs}s  ({time_exp_str})"))
+                remaining = time_exp - now
+                m = int(remaining.total_seconds() // 60)
+                s = int(remaining.total_seconds() % 60)
+                print(ok(f"Token valid — expires in {m}m {s}s  ({time_exp_str})"))
             else:
-                elapsed = now - time_exp
-                print(fail(f"Token EXPIRED {int(elapsed.total_seconds())}s ago  ({time_exp_str})"))
+                elapsed = int((now - time_exp).total_seconds())
+                print(fail(f"Token EXPIRED {elapsed}s ago  ({time_exp_str})"))
         except ValueError as e:
             print(fail(f"time_exp parse error: {e}"))
 
