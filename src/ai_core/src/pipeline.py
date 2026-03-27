@@ -53,7 +53,7 @@ class Config:
     cam_fps: int = 30
 
     # Model configuration (adjusted based on device)
-    yolo_model: str = "yolo11n.pt"
+    yolo_model: str = "yolo11l.engine"
     insightface_model: str = "buffalo_l"
     det_size: Tuple[int, int] = field(default=(640, 640))
 
