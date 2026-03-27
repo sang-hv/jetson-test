@@ -9,7 +9,7 @@ Extends BasePipeline with shop-specific features:
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, List, Set
+from typing import TYPE_CHECKING, Dict, List, Set
 
 import numpy as np
 
@@ -33,7 +33,11 @@ class ShopPipeline(BasePipeline):
         config = self.config
 
         self.counter = None
-        self._zone_entry_notified: Set[int] = set()
+        # Maps track_id -> timestamp of last zone_entry notification.
+        # Used as cooldown to prevent duplicate messages when a track oscillates
+        # at the zone boundary or temporarily loses/regains tracking.
+        self._zone_entry_last_notified: Dict[int, float] = {}
+        self._zone_entry_cooldown: float = 10.0  # seconds
 
         if config.counting_enabled:
             from .counter import ZoneCounter
@@ -110,18 +114,30 @@ class ShopPipeline(BasePipeline):
         # Detect new entries into IN zone
         in_zone_tracks = self.counter.get_tracks_in_zone("in")
 
-        # Remove from notified set if track left IN zone or is no longer active
-        self._zone_entry_notified &= in_zone_tracks & active_ids
+        # Find tracks currently in IN zone that haven't been notified within the cooldown window.
+        # Using a time-based cooldown (instead of a plain set) prevents duplicate messages when:
+        # - a track oscillates at the zone boundary (bbox jitter)
+        # - tracking is temporarily lost and regained (same or new track_id)
+        now = time.time()
+        new_entries = {
+            tid for tid in in_zone_tracks & active_ids
+            if now - self._zone_entry_last_notified.get(tid, 0.0) >= self._zone_entry_cooldown
+        }
 
-        # Find tracks that just entered IN zone
-        new_entries = (in_zone_tracks & active_ids) - self._zone_entry_notified
+        # Purge cooldown entries for tracks that are no longer relevant
+        relevant_ids = active_ids | in_zone_tracks
+        self._zone_entry_last_notified = {
+            tid: t for tid, t in self._zone_entry_last_notified.items()
+            if tid in relevant_ids
+        }
+
         if not new_entries or self.zmq_publisher is None:
             return
 
         track_bboxes = {p.track_id: p.bbox for p in tracked_persons}
         detections = []
         for tid in new_entries:
-            self._zone_entry_notified.add(tid)
+            self._zone_entry_last_notified[tid] = now
 
             info = track_infos.get(tid, {})
             track_info = self.track_manager.get_track_info(tid)
