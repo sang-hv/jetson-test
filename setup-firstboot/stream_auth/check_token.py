@@ -97,7 +97,8 @@ def main() -> None:
         print(f"  {info(k):30s} {v}")
 
     print()
-    print(f"{BOLD}Signature (base64):{RESET} {sig_b64}")
+    print(f"{BOLD}Signature:{RESET}")
+    print(f"  received (from token) : {sig_b64}")
 
     # ── 2. HMAC verify ────────────────────────────────────────────────────────
     print()
@@ -114,6 +115,9 @@ def main() -> None:
                 message,
                 hashlib.sha256,
             ).digest()
+            expected_b64 = base64.b64encode(expected_sig).decode()
+            print(f"  expected (by device)  : {expected_b64}")
+            print(f"  match                 : {'YES' if hmac.compare_digest(received_sig, expected_sig) else 'NO'}")
             if hmac.compare_digest(received_sig, expected_sig):
                 print(ok("HMAC signature valid"))
             else:
