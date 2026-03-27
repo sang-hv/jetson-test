@@ -138,9 +138,9 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
         _cache.set(token, *result, now.timestamp() + DENY_CACHE_TTL)
         return result
 
-    # --- 2. Recompute HMAC ---
+    # --- 2. Recompute HMAC (signed on camera_id only) ---
     try:
-        message = json.dumps(payload, sort_keys=True).encode("utf-8")
+        message = payload["camera_id"].encode("utf-8")
         expected_hex = hmac.new(
             secret_key.encode("utf-8"),
             message,

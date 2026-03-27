@@ -99,8 +99,8 @@ def main() -> None:
     if not secret_key:
         print(warn("secret_key is empty — skipping HMAC check"))
     else:
-        message = json.dumps(payload, sort_keys=True).encode("utf-8")
-        print(f"  message    : {message.decode()}")
+        message = payload.get("camera_id", "").encode("utf-8")
+        print(f"  message    : {message.decode()}  (camera_id only)")
         expected_hex = hmac.new(
             secret_key.encode("utf-8"),
             message,
