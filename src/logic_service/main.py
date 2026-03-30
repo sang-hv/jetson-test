@@ -12,7 +12,6 @@ so it never blocks the HTTP server.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from pathlib import Path
@@ -37,6 +36,7 @@ from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, Pass
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
 from services.shop_zone_alert import process_shop_zone_sqs_event
+from services.enterprise_zone_alert import process_employee_crossing_zone_alert, process_restricted_zone_alert
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,32 +76,6 @@ async def _get_camera_facility(db) -> str | None:
     return row[0] if row is not None else None
 
 
-async def _process_employee_crossing(payload: EmployeeCrossingPayload) -> None:
-    """Log employee check-in / check-out events. No SQS, no rules engine."""
-    from datetime import datetime, timezone
-    for det in payload.detections:
-        action = "CHECKIN" if det.direction == "in" else "CHECKOUT"
-        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        conf_str = f"{det.confidence:.2f}" if det.confidence is not None else "?"
-        logger.info(
-            f"[ENTERPRISE] {dt} | {action} | employee={det.person_id} "
-            f"| track_id={det.track_id} | confidence={conf_str}"
-        )
-
-
-async def _process_restricted_zone_alert(payload: RestrictedZoneAlertPayload) -> None:
-    """Log persons detected inside the restricted zone."""
-    from datetime import datetime, timezone
-    for det in payload.detections:
-        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        conf_str = f"{det.confidence:.2f}" if det.confidence is not None else "?"
-        logger.info(
-            f"[ENTERPRISE][RESTRICTED] {dt} | person={det.person_id} "
-            f"| track_id={det.track_id} | confidence={conf_str} "
-            f"| age={det.age} | gender={det.gender}"
-        )
-
-
 async def _zmq_subscriber_loop() -> None:
     """
     Continuously receive ZMQ messages and forward to rule_engine.
@@ -121,7 +95,13 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_EXIT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
-    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}, {ZMQ_ZONE_ENTRY_TOPIC.decode()}, {ZMQ_ZONE_EXIT_TOPIC.decode()}, {ZMQ_EMPLOYEE_CROSSING_TOPIC.decode()}]")
+    all_topics = [
+        ZMQ_TOPIC, ZMQ_STRANGER_TOPIC, ZMQ_PASSERBY_TOPIC,
+        ZMQ_ANIMAL_TOPIC, ZMQ_PERSON_COUNT_TOPIC,
+        ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC,
+        ZMQ_EMPLOYEE_CROSSING_TOPIC, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC,
+    ]
+    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics={[t.decode() for t in all_topics]}")
 
     try:
         while True:
@@ -155,7 +135,6 @@ async def _zmq_subscriber_loop() -> None:
                     elif topic == ZMQ_ANIMAL_TOPIC:
                         payload = AnimalAlertPayload.model_validate_json(raw)
                         result = await process_animal_alert(payload, db)
-                    
                         handled = True
                     elif topic in (ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC):
                         # Store-only topics — ignore for Family cameras.
@@ -175,11 +154,11 @@ async def _zmq_subscriber_loop() -> None:
                 elif facility == "Enterprise":
                     if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
                         payload = EmployeeCrossingPayload.model_validate_json(raw)
-                        await _process_employee_crossing(payload)
+                        await process_employee_crossing_zone_alert(payload)
                         handled = True
                     elif topic == ZMQ_RESTRICTED_ZONE_ALERT_TOPIC:
                         payload = RestrictedZoneAlertPayload.model_validate_json(raw)
-                        await _process_restricted_zone_alert(payload)
+                        await process_restricted_zone_alert(payload)
                         handled = True
                     else:
                         handled = False

@@ -36,8 +36,6 @@ class RestrictedZoneAlertDetection(BaseModel):
 
     track_id: int = Field(..., description="ByteTrack persistent ID")
     person_id: str = Field(..., description="Recognised name, 'Unknown', or 'Name?' if uncertain")
-    age: Optional[int] = Field(None, description="Confirmed age, NULL if uncertain")
-    gender: Optional[str] = Field(None, description='"M", "F", or NULL if uncertain')
     confidence: Optional[float] = Field(None, description="Recognition confidence 0.0-1.0")
     detection_result: Optional[str] = Field(None, description="Path to saved detection image")
 
