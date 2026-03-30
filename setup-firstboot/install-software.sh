@@ -24,7 +24,7 @@ err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
 step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
 
 if [ "$EUID" -ne 0 ]; then
-    err "Cần chạy với sudo/root"
+    err "It needs to be run with sudo/root"
     exit 1
 fi
 
