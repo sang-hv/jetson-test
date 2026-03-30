@@ -42,7 +42,7 @@ else
     [ -z "$DATA_DIR" ] && DATA_DIR="/home/avis/data"
 fi
 
-DETECTION_DIR="${DETECTION_DIR:-$DATA_DIR/media/detection}"
+DETECTION_DIR="${DETECTION_DIR:-/detection}"
 DB_PATH="$DATA_DIR/db/logic_service.db"
 LOG_DIR="$DATA_DIR/logs"
 
