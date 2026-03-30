@@ -113,6 +113,10 @@ class Config:
     # None = use full frame
     detection_zone: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
 
+    # Restricted zone: persons entering this area trigger an alert (normalized coords)
+    # Loaded from DB (detection_zones, code='restricted')
+    restricted_zone: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
+
     # Pipeline type: "home" or "shop"
     pipeline_type: str = "home"
 
@@ -172,6 +176,23 @@ class Config:
                     print("Warning: detection zone needs 4 corner points")
             else:
                 print("[Config] No detection zone found in DB, using full frame")
+
+            # Load restricted zone (alert when person enters this area)
+            restricted_zone: Optional[Tuple[float, float, float, float]] = None
+            _res_row = _conn.execute(
+                "SELECT coordinates FROM detection_zones WHERE code = 'restricted' LIMIT 1"
+            ).fetchone()
+            if _res_row:
+                _coords = _json.loads(_res_row[0])
+                if len(_coords) >= 4:
+                    _xs = [float(pt["x"]) for pt in _coords]
+                    _ys = [float(pt["y"]) for pt in _coords]
+                    restricted_zone = (min(_xs), min(_ys), max(_xs), max(_ys))
+                    print(f"[Config] Restricted zone loaded: {restricted_zone}")
+                else:
+                    print("Warning: restricted zone needs 4 corner points")
+            else:
+                print("[Config] No restricted zone found in DB")
 
             # Load counting line (entry_exit zone)
             if counting_enabled:
@@ -278,6 +299,7 @@ class Config:
             display_enabled=display_enabled,
             # Detection zone from DB
             detection_zone=detection_zone,
+            restricted_zone=restricted_zone,
             # Pipeline type from .env
             pipeline_type=pipeline_type,
         )

@@ -41,6 +41,10 @@ class EnterprisePipeline(BasePipeline):
         self._employee_crossing_last_notified: Dict[int, float] = {}
         self._employee_crossing_cooldown: float = 10.0  # seconds
 
+        # Restricted zone alert: per-track cooldown
+        self._restricted_alert_last_notified: Dict[int, float] = {}
+        self._restricted_alert_cooldown: float = 10.0  # seconds
+
         if config.counting_enabled:
             from .counter import ZoneCounter
 
@@ -91,6 +95,10 @@ class EnterprisePipeline(BasePipeline):
             tid: t for tid, t in self._employee_crossing_last_notified.items()
             if tid in active_set
         }
+
+        # Restricted zone: alert when any person enters the restricted area
+        if self.config.restricted_zone is not None and self.zmq_publisher is not None:
+            self._check_restricted_zone(tracked_persons, frame)
 
     def _draw_extra_overlays(self, frame: np.ndarray) -> np.ndarray:
         if self.counter is not None:
@@ -143,3 +151,57 @@ class EnterprisePipeline(BasePipeline):
         if detections:
             payload = {"timestamp": time.time(), "detections": detections}
             self.zmq_publisher.send_employee_crossing(payload)
+
+    def _check_restricted_zone(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Alert when a person's bbox center enters the restricted zone."""
+        min_x, min_y, max_x, max_y = self.config.restricted_zone
+        fh, fw = frame.shape[:2]
+        now = time.time()
+        detections = []
+
+        for person in tracked_persons:
+            tid = person.track_id
+            x1, y1, x2, y2 = person.bbox.astype(int)
+            cx_ratio = ((x1 + x2) / 2) / fw
+            cy_ratio = ((y1 + y2) / 2) / fh
+
+            if not (min_x <= cx_ratio <= max_x and min_y <= cy_ratio <= max_y):
+                continue
+
+            elapsed = now - self._restricted_alert_last_notified.get(tid, 0.0)
+            if elapsed < self._restricted_alert_cooldown:
+                continue
+
+            self._restricted_alert_last_notified[tid] = now
+
+            label = self.track_manager.get_label(tid)
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_info = self.track_manager.get_track_info(tid)
+            confidence = track_info.get("avg_score") if track_info else None
+            detection_result = self.detection_saver.save_frame_with_box(
+                frame, person.bbox, "restricted_zone", tid, label
+            )
+
+            detections.append({
+                "track_id": tid,
+                "person_id": label,
+                "age": age,
+                "gender": gender,
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        if detections:
+            self.zmq_publisher.send_restricted_zone_alert({
+                "timestamp": now,
+                "detections": detections,
+            })
+
+        # Purge stale cooldown entries for tracks no longer in frame
+        active_ids = {p.track_id for p in tracked_persons}
+        self._restricted_alert_last_notified = {
+            tid: t for tid, t in self._restricted_alert_last_notified.items()
+            if tid in active_ids
+        }

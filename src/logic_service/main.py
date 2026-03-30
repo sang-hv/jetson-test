@@ -32,7 +32,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from database.connection import close_db, get_db, init_db
-from schemas.enterprise_models import EmployeeCrossingPayload
+from schemas.enterprise_models import EmployeeCrossingPayload, RestrictedZoneAlertPayload
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
@@ -57,6 +57,7 @@ ZMQ_ZONE_EXIT_TOPIC = b"zone_exit"
 
 # enterprise topics
 ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
+ZMQ_RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
 
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
@@ -88,6 +89,19 @@ async def _process_employee_crossing(payload: EmployeeCrossingPayload) -> None:
         )
 
 
+async def _process_restricted_zone_alert(payload: RestrictedZoneAlertPayload) -> None:
+    """Log persons detected inside the restricted zone."""
+    from datetime import datetime, timezone
+    for det in payload.detections:
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        conf_str = f"{det.confidence:.2f}" if det.confidence is not None else "?"
+        logger.info(
+            f"[ENTERPRISE][RESTRICTED] {dt} | person={det.person_id} "
+            f"| track_id={det.track_id} | confidence={conf_str} "
+            f"| age={det.age} | gender={det.gender}"
+        )
+
+
 async def _zmq_subscriber_loop() -> None:
     """
     Continuously receive ZMQ messages and forward to rule_engine.
@@ -106,6 +120,7 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_ENTRY_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_EXIT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
     logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}, {ZMQ_ZONE_ENTRY_TOPIC.decode()}, {ZMQ_ZONE_EXIT_TOPIC.decode()}, {ZMQ_EMPLOYEE_CROSSING_TOPIC.decode()}]")
 
     try:
@@ -161,6 +176,10 @@ async def _zmq_subscriber_loop() -> None:
                     if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
                         payload = EmployeeCrossingPayload.model_validate_json(raw)
                         await _process_employee_crossing(payload)
+                        handled = True
+                    elif topic == ZMQ_RESTRICTED_ZONE_ALERT_TOPIC:
+                        payload = RestrictedZoneAlertPayload.model_validate_json(raw)
+                        await _process_restricted_zone_alert(payload)
                         handled = True
                     else:
                         handled = False
