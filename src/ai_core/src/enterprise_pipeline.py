@@ -32,6 +32,11 @@ if TYPE_CHECKING:
 class EnterprisePipeline(BasePipeline):
     """Pipeline for enterprise cameras with employee check-in/check-out detection."""
 
+    def __init__(self, config: "Config") -> None:
+        # Age/gender recognition is not needed in enterprise mode
+        config.age_gender_enabled = False
+        super().__init__(config)
+
     def _init_extra_components(self) -> None:
         config = self.config
 
@@ -72,11 +77,8 @@ class EnterprisePipeline(BasePipeline):
         track_scores = {}
         for person in tracked_persons:
             tid = person.track_id
-            age, gender = self.track_manager.get_age_gender(tid)
             track_infos[tid] = {
                 "person_id": self.track_manager.get_label(tid),
-                "age": age,
-                "gender": gender,
             }
             track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
 
@@ -177,7 +179,6 @@ class EnterprisePipeline(BasePipeline):
             self._restricted_alert_last_notified[tid] = now
 
             label = self.track_manager.get_label(tid)
-            age, gender = self.track_manager.get_age_gender(tid)
             track_info = self.track_manager.get_track_info(tid)
             confidence = track_info.get("avg_score") if track_info else None
             detection_result = self.detection_saver.save_frame_with_box(
@@ -187,8 +188,6 @@ class EnterprisePipeline(BasePipeline):
             detections.append({
                 "track_id": tid,
                 "person_id": label,
-                "age": age,
-                "gender": gender,
                 "confidence": confidence,
                 "detection_result": detection_result,
             })
