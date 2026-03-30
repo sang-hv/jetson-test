@@ -347,6 +347,28 @@ settings_map = {
     "stream_secret_key": data.get("stream_secret_key", ""),
     "stream_view_duration_minutes": str(data.get("stream_view_duration_minutes", "")),
 }
+
+# ai_threshold: float 0.7 → 1.0, default 0.7
+raw_ai_threshold = data.get("ai_threshold")
+if raw_ai_threshold is not None:
+    try:
+        val = float(raw_ai_threshold)
+        if val < 0.7 or val > 1.0:
+            val = 0.7
+        settings_map["ai_threshold"] = str(val)
+    except (ValueError, TypeError):
+        settings_map["ai_threshold"] = "0.7"
+
+# image_retention_days: int 7 → 100, default 7
+raw_retention_days = data.get("image_retention_days")
+if raw_retention_days is not None:
+    try:
+        val = int(raw_retention_days)
+        if val < 7 or val > 100:
+            val = 7
+        settings_map["image_retention_days"] = str(val)
+    except (ValueError, TypeError):
+        settings_map["image_retention_days"] = "7"
 # Also extract from information block
 info: dict = data.get("information", {})
 if info:
