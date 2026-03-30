@@ -48,9 +48,9 @@ RestartSec=5
 # start-stream.py sends WATCHDOG=1 every 10s while frames are flowing
 WatchdogSec=60
 
-# OOM: prefer to kill camera-stream (score 500) before go2rtc (score -900)
-# When killed → Restart=always brings it back cleanly with nvargus reset above
-OOMScoreAdjust=500
+# Hard memory limit — kill and restart if leaks beyond 1.5GB
+MemoryMax=1536M
+MemorySwapMax=512M
 
 # Logging
 StandardOutput=journal
