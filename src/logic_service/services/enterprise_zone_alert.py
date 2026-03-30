@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from schemas.enterprise_models import RestrictedZoneAlertPayload, EmployeeCrossingPayload
+from schemas.enterprise_models import RestrictedZoneAlertPayload, EmployeeCrossingPayload, PPEViolationAlertPayload
 from services.sqs_sender import send_detection_to_sqs
 
 logger = logging.getLogger(__name__)
@@ -37,14 +37,14 @@ def _send_detections(detections, timestamp: float, position: str) -> int:
     return processed
 
 
-async def process_restricted_zone_alert(payload: RestrictedZoneAlertPayload) -> dict:
+async def process_restricted_alert(payload: RestrictedZoneAlertPayload) -> dict:
     """Send each detection to SQS. No DB rules, debounce, or time-window checks."""
     processed = _send_detections(payload.detections, payload.timestamp, position="restricted")
     logger.info(f"[ENTERPRISE ZONE] processed={processed} position='restricted'")
     return {"processed": processed}
 
 
-async def process_employee_crossing_zone_alert(payload: EmployeeCrossingPayload) -> dict:
+async def process_employee_crossing_alert(payload: EmployeeCrossingPayload) -> dict:
     """Send each crossing detection to SQS. No DB rules, debounce, or time-window checks."""
     processed = 0
     for det in payload.detections:
@@ -63,4 +63,24 @@ async def process_employee_crossing_zone_alert(payload: EmployeeCrossingPayload)
         )
         processed += 1
     logger.info(f"[ENTERPRISE ZONE] processed={processed} position='crossing'")
+    return {"processed": processed}
+
+async def process_ppe_violation_alert(payload: PPEViolationAlertPayload) -> dict:
+    """Send each PPE violation detection to SQS. No DB rules, debounce, or time-window checks."""
+    processed = 0
+    for det in payload.detections:
+        send_detection_to_sqs(
+            rule_code="enterprise",
+            member_id=det.person_id or "",
+            detected_at=payload.timestamp,
+            detection_image_url=det.detection_result,
+            confidence=det.confidence,
+            object_attributes={
+                "helmet": "helmet" in det.violations,
+                "mask": "mask" in det.violations,
+                "glove": "glove" in det.violations,
+            },
+        )
+        processed += 1
+    logger.info(f"[ENTERPRISE ZONE] processed={processed} position='ppe_violation'")
     return {"processed": processed}
