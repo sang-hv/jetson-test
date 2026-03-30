@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from database.connection import close_db, get_db, init_db
-from schemas.enterprise_models import EmployeeCrossingPayload, RestrictedZoneAlertPayload
+from schemas.enterprise_models import EmployeeCrossingPayload, PPEViolationAlertPayload, RestrictedZoneAlertPayload
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
@@ -58,6 +58,7 @@ ZMQ_ZONE_EXIT_TOPIC = b"zone_exit"
 # enterprise topics
 ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
 ZMQ_RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
+ZMQ_PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
 
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
@@ -74,6 +75,20 @@ async def _get_camera_facility(db) -> str | None:
     )
     row = await cursor.fetchone()
     return row[0] if row is not None else None
+
+
+async def _process_ppe_violation_alert(payload: PPEViolationAlertPayload) -> None:
+    """Log persons with confirmed PPE violations detected by the enterprise pipeline."""
+    from datetime import datetime, timezone
+    for det in payload.detections:
+        dt = datetime.fromtimestamp(payload.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        conf_str = f"{det.confidence:.2f}" if det.confidence is not None else "?"
+        violations_str = ", ".join(det.violations)
+        logger.info(
+            f"[ENTERPRISE][PPE] {dt} | person={det.person_id} "
+            f"| track_id={det.track_id} | violations=[{violations_str}] "
+            f"| confidence={conf_str} | age={det.age} | gender={det.gender}"
+        )
 
 
 async def _zmq_subscriber_loop() -> None:
@@ -95,6 +110,7 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_EXIT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PPE_VIOLATION_ALERT_TOPIC)
     all_topics = [
         ZMQ_TOPIC, ZMQ_STRANGER_TOPIC, ZMQ_PASSERBY_TOPIC,
         ZMQ_ANIMAL_TOPIC, ZMQ_PERSON_COUNT_TOPIC,
@@ -158,7 +174,15 @@ async def _zmq_subscriber_loop() -> None:
                         handled = True
                     elif topic == ZMQ_RESTRICTED_ZONE_ALERT_TOPIC:
                         payload = RestrictedZoneAlertPayload.model_validate_json(raw)
-                        await process_restricted_zone_alert(payload)
+                        await _process_restricted_zone_alert(payload)
+                        handled = True
+                    elif topic == ZMQ_PPE_VIOLATION_ALERT_TOPIC:
+                        payload = PPEViolationAlertPayload.model_validate_json(raw)
+                        await _process_ppe_violation_alert(payload)
+                        handled = True
+                    elif topic == ZMQ_PPE_VIOLATION_ALERT_TOPIC:
+                        payload = PPEViolationAlertPayload.model_validate_json(raw)
+                        await _process_ppe_violation_alert(payload)
                         handled = True
                     else:
                         handled = False

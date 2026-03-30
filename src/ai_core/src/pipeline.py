@@ -70,6 +70,12 @@ class Config:
     ppe_confidence_threshold: float = 0.5
     ppe_model_path: str = "yolov8m-protective-equipment-detection.pt"
 
+    # PPE violation alert settings (enterprise pipeline only, loaded from .env)
+    ppe_violation_alert_enabled: bool = False
+    ppe_violation_alert_mask: bool = True
+    ppe_violation_alert_helmet: bool = True
+    ppe_violation_alert_glove: bool = True
+
     # People counting (line crossing) settings
     # Line + in_direction_point loaded from DB (detection_zones, code='entry_exit')
     counting_enabled: bool = False
@@ -143,6 +149,12 @@ class Config:
         ppe_enabled = env_vars.get("PPE_DETECTION_ENABLED", "false").lower() == "true"
         ppe_threshold = float(env_vars.get("PPE_CONFIDENCE_THRESHOLD", "0.5"))
         ppe_model = env_vars.get("PPE_MODEL_PATH", "yolov8m-protective-equipment-detection.pt")
+
+        # Parse PPE violation alert settings from .env (enterprise only)
+        ppe_violation_alert_enabled = env_vars.get("PPE_VIOLATION_ALERT_ENABLED", "false").lower() == "true"
+        ppe_violation_alert_mask = env_vars.get("PPE_VIOLATION_ALERT_MASK", "true").lower() == "true"
+        ppe_violation_alert_helmet = env_vars.get("PPE_VIOLATION_ALERT_HELMET", "true").lower() == "true"
+        ppe_violation_alert_glove = env_vars.get("PPE_VIOLATION_ALERT_GLOVE", "true").lower() == "true"
 
         # Parse counting settings from .env
         counting_enabled = env_vars.get("COUNTING_ENABLED", "false").lower() == "true"
@@ -269,6 +281,11 @@ class Config:
             ppe_detection_enabled=ppe_enabled,
             ppe_confidence_threshold=ppe_threshold,
             ppe_model_path=ppe_model,
+            # PPE violation alert from .env
+            ppe_violation_alert_enabled=ppe_violation_alert_enabled,
+            ppe_violation_alert_mask=ppe_violation_alert_mask,
+            ppe_violation_alert_helmet=ppe_violation_alert_helmet,
+            ppe_violation_alert_glove=ppe_violation_alert_glove,
             # Counting from .env
             counting_enabled=counting_enabled,
             counting_line_start=counting_line_start,

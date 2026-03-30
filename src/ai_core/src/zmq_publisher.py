@@ -43,6 +43,9 @@ class ZMQPublisher:
     # restricted zone alert topic
     RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
 
+    # PPE violation alert topic (enterprise only)
+    PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
+
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
@@ -144,6 +147,16 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher restricted zone alert send failed: {exc}")
+
+    def send_ppe_violation_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the ppe_violation_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.PPE_VIOLATION_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher PPE violation alert send failed: {exc}")
 
     def send_mask_alert(self, data: dict) -> None:
         """Serialize data as JSON and publish with the mask_alert topic prefix."""

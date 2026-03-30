@@ -50,6 +50,25 @@ class EnterprisePipeline(BasePipeline):
         self._restricted_alert_last_notified: Dict[int, float] = {}
         self._restricted_alert_cooldown: float = 10.0  # seconds
 
+        # PPE violation alert: tracks that have already been alerted (reset when track leaves frame)
+        self._ppe_alerted_tracks: set = set()
+
+        if config.ppe_violation_alert_enabled:
+            items = []
+            if config.ppe_violation_alert_mask:
+                items.append("mask")
+            if config.ppe_violation_alert_helmet:
+                items.append("helmet")
+            if config.ppe_violation_alert_glove:
+                items.append("glove")
+            if not config.mask_detection_enabled and config.ppe_violation_alert_mask:
+                print("[EnterprisePipeline] WARNING: PPE_VIOLATION_ALERT_MASK=true but MASK_DETECTION_ENABLED=false")
+            if not config.ppe_detection_enabled and (config.ppe_violation_alert_helmet or config.ppe_violation_alert_glove):
+                print("[EnterprisePipeline] WARNING: PPE_VIOLATION_ALERT_HELMET/GLOVE=true but PPE_DETECTION_ENABLED=false")
+            print(f"[EnterprisePipeline] PPE violation alerts: Enabled (items={items})")
+        else:
+            print("[EnterprisePipeline] PPE violation alerts: Disabled (set PPE_VIOLATION_ALERT_ENABLED=true)")
+
         if config.counting_enabled:
             from .counter import ZoneCounter
 
@@ -68,10 +87,8 @@ class EnterprisePipeline(BasePipeline):
         tracked_animals: List[TrackedAnimal],
         frame: np.ndarray,
     ) -> None:
-        if self.counter is None:
-            return
-
         active_ids = [p.track_id for p in tracked_persons]
+        active_set = set(active_ids)
 
         track_infos = {}
         track_scores = {}
@@ -82,25 +99,29 @@ class EnterprisePipeline(BasePipeline):
             }
             track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
 
-        self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
+            self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
 
-        crossings, _ = self.counter.process_lost_tracks(
-            active_ids, self._frame_count, self.config.counting_cleanup_max_age
-        )
+            crossings, _ = self.counter.process_lost_tracks(
+                active_ids, self._frame_count, self.config.counting_cleanup_max_age
+            )
 
-        if crossings and self.zmq_publisher is not None:
-            self._publish_employee_crossings(crossings)
+            if crossings and self.zmq_publisher is not None:
+                self._publish_employee_crossings(crossings)
 
         # Purge cooldown entries for tracks no longer active
-        active_set = set(active_ids)
         self._employee_crossing_last_notified = {
             tid: t for tid, t in self._employee_crossing_last_notified.items()
             if tid in active_set
         }
+        self._ppe_alerted_tracks = {tid for tid in self._ppe_alerted_tracks if tid in active_set}
 
         # Restricted zone: alert when any person enters the restricted area
         if self.config.restricted_zone is not None and self.zmq_publisher is not None:
             self._check_restricted_zone(tracked_persons, frame)
+
+        # PPE violation: alert when a person is confirmed not wearing required PPE
+        if self.config.ppe_violation_alert_enabled and self.zmq_publisher is not None:
+            self._check_ppe_violations(tracked_persons, frame)
 
     def _draw_extra_overlays(self, frame: np.ndarray) -> np.ndarray:
         if self.counter is not None:
@@ -204,3 +225,59 @@ class EnterprisePipeline(BasePipeline):
             tid: t for tid, t in self._restricted_alert_last_notified.items()
             if tid in active_ids
         }
+
+    def _check_ppe_violations(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Alert when a person is confirmed not wearing required PPE.
+
+        Only fires when status is confirmed False (not None/uncertain).
+        Per-track cooldown prevents repeated alerts while person remains in frame.
+        """
+        cfg = self.config
+        now = time.time()
+        detections = []
+
+        for person in tracked_persons:
+            tid = person.track_id
+
+            # Collect confirmed violations (False only — None means uncertain, skip)
+            violations: List[str] = []
+            if cfg.ppe_violation_alert_mask and self.track_manager.get_mask_status(tid) is False:
+                violations.append("mask")
+            if cfg.ppe_violation_alert_helmet and self.track_manager.get_helmet_status(tid) is False:
+                violations.append("helmet")
+            if cfg.ppe_violation_alert_glove and self.track_manager.get_glove_status(tid) is False:
+                violations.append("glove")
+
+            if not violations:
+                continue
+
+            # Only alert once per track entry — reset when track leaves frame
+            if tid in self._ppe_alerted_tracks:
+                continue
+            self._ppe_alerted_tracks.add(tid)
+
+            label = self.track_manager.get_label(tid)
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_info = self.track_manager.get_track_info(tid)
+            confidence = track_info.get("avg_score") if track_info else None
+            detection_result = self.detection_saver.save_frame_with_box(
+                frame, person.bbox, "ppe_violation", tid, label
+            )
+
+            detections.append({
+                "track_id": tid,
+                "person_id": label,
+                "violations": violations,
+                "age": age,
+                "gender": gender,
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        if detections:
+            self.zmq_publisher.send_ppe_violation_alert({
+                "timestamp": now,
+                "detections": detections,
+            })
