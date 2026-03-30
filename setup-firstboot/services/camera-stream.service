@@ -16,18 +16,16 @@ RuntimeMaxSec=4h
 ExecStartPre=+/bin/systemctl restart nvargus-daemon
 ExecStartPre=/bin/sleep 2
 
-# Reload PulseAudio echo-cancel AFTER pipeline starts (ExecStartPost runs in user session via su)
-# nvargus-daemon restart above disrupts PulseAudio → echo-cancel module becomes stale
-# Must reload AFTER pulsesrc connects, not before
-ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
-ExecStartPost=+/bin/bash -c '\
-  sleep 3; \
+# Recreate echo cancel BEFORE pulsesrc connects.
+# nvargus-daemon restart above can disrupt PulseAudio → stale echo-cancel module.
+# Must reload here so start-stream.py finds a fresh echocancel_source.
+ExecStartPre=/bin/bash -c '\
   U=$(id -u __USER__); \
-  su - __USER__ -c "\
-    export XDG_RUNTIME_DIR=/run/user/$U \
-           DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus \
-           PULSE_SERVER=unix:/run/user/$U/pulse/native; \
-    systemctl --user restart audio-autostart.service"'
+  export XDG_RUNTIME_DIR=/run/user/$U \
+         PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+  /opt/audio/setup-audio-autostart.sh'
+
+ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
 Restart=always
 RestartSec=5
 
