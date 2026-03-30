@@ -84,8 +84,15 @@ chmod a+r /etc/device/device.env
 
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
-chmod +x /opt/device/sync-config.py /opt/device/device-update.py
-log "sync-config + device-update deployed"
+cp "$SCRIPT_DIR/scripts/cleanup-detections.sh" /opt/device/cleanup-detections.sh
+chmod +x /opt/device/sync-config.py /opt/device/device-update.py /opt/device/cleanup-detections.sh
+
+cp "$SCRIPT_DIR/services/cleanup-detections.service" /etc/systemd/system/cleanup-detections.service
+cp "$SCRIPT_DIR/services/cleanup-detections.timer" /etc/systemd/system/cleanup-detections.timer
+systemctl daemon-reload
+systemctl enable cleanup-detections.timer
+systemctl start cleanup-detections.timer
+log "sync-config + device-update + cleanup-detections deployed"
 
 SYNC_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/sync-config.py"
 if crontab -l 2>/dev/null | grep -q "sync-config.py"; then

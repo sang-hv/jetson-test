@@ -1,0 +1,10 @@
+[Unit]
+Description=Cleanup old detection images and logs
+
+[Service]
+Type=oneshot
+ExecStart=/opt/device/cleanup-detections.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
