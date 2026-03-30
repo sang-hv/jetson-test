@@ -161,8 +161,27 @@ iface_has_ip() {
 iface_can_ping() {
     local IFACE="$1"
     local HOST="${2:-$PING_HOST}"
-    ping -I "$IFACE" -c 2 -W 5 -q "$HOST" &>/dev/null || \
-        ping6 -I "$IFACE" -c 2 -W 5 -q 2001:4860:4860::8888 &>/dev/null
+
+    # Temporarily add a host route via this interface's gateway to ensure
+    # ping actually goes through it (avoids death spiral when metric is high).
+    local GW TMP_ROUTE=0
+    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
+    if [ -z "$GW" ]; then
+        local IP
+        IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
+        [ -n "$IP" ] && GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
+    fi
+    if [ -n "$GW" ]; then
+        ip route add "$HOST" via "$GW" dev "$IFACE" metric 10 2>/dev/null && TMP_ROUTE=1
+    fi
+
+    ping -I "$IFACE" -c 2 -W 5 -q "$HOST" &>/dev/null
+    local RESULT=$?
+
+    [ "$TMP_ROUTE" -eq 1 ] && ip route del "$HOST" via "$GW" dev "$IFACE" metric 10 2>/dev/null || true
+
+    [ $RESULT -eq 0 ] && return 0
+    ping6 -I "$IFACE" -c 2 -W 5 -q 2001:4860:4860::8888 &>/dev/null
 }
 
 # ---------------------------------------------------------------------------
