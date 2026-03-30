@@ -26,6 +26,21 @@ ExecStartPre=/bin/bash -c '\
   /opt/audio/setup-audio-autostart.sh'
 
 ExecStart=/usr/bin/python3 /opt/stream/start-stream.py --mode service
+
+# Re-apply volume AFTER pulsesrc connects (Type=notify → runs after READY=1).
+# PulseAudio module-stream-restore may override volumes set in ExecStartPre
+# when pulsesrc first connects; this post-connect set overrides it back.
+ExecStartPost=/bin/bash -c '\
+  sleep 2; \
+  U=$(id -u __USER__); \
+  export XDG_RUNTIME_DIR=/run/user/$U \
+         PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+  pactl set-source-volume echocancel_source 100%% 2>/dev/null; \
+  MIC=$(pactl list short sources | grep -iv "monitor\|echo" | grep -i "usb\|jabra" | head -1 | awk "{print \$2}"); \
+  [ -n "$MIC" ] && pactl set-source-volume "$MIC" 100%% 2>/dev/null; \
+  pactl set-sink-volume echocancel_sink 80%% 2>/dev/null; \
+  echo "[audio] Post-connect volume applied: mic=100%% sink=80%%"'
+
 Restart=always
 RestartSec=5
 
