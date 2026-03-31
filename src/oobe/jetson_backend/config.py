@@ -31,6 +31,21 @@ SSID_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"     # Nhận tên WiFi
 PWD_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"      # Nhận mật khẩu WiFi
 STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef3"   # Trạng thái kết nối
 
+# UUID cho WiFi Scan (tính năng mới)
+WIFI_SCAN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef4"   # Write: trigger scan WiFi
+WIFI_LIST_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef5"   # Read/Notify: danh sách WiFi (JSON)
+
+# UUID cho PIN Verification (xác thực kết nối)
+PIN_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef6"         # Write: gửi PIN code
+AUTH_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef7"  # Read/Notify: trạng thái xác thực
+
+# UUID cho Network Status Check (kiểm tra trạng thái mạng hiện tại)
+NET_CHECK_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef8"   # Write: trigger kiểm tra mạng
+NET_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef9"  # Read/Notify: trạng thái mạng (JSON)
+
+# Mã PIN cố định cho xác thực kết nối BLE
+PIN_CODE = "123456"
+
 # =============================================================================
 # TRẠNG THÁI KẾT NỐI WIFI
 # =============================================================================
@@ -44,6 +59,52 @@ class WiFiStatus:
     CONNECTING = 1       # Đang thực hiện kết nối WiFi
     SUCCESS = 2          # Kết nối thành công
     ERROR = 3            # Lỗi kết nối (sai mật khẩu, không tìm thấy mạng, etc.)
+
+
+class WiFiScanStatus:
+    """
+    Enum cho các trạng thái scan WiFi
+    Được gửi kèm với danh sách WiFi qua WIFI_LIST_CHAR
+    """
+    IDLE = 0             # Chưa scan
+    SCANNING = 1         # Đang scan
+    COMPLETED = 2        # Scan hoàn tất
+    ERROR = 3            # Lỗi khi scan
+
+
+class AuthStatus:
+    """
+    Enum cho các trạng thái xác thực PIN.
+    Được gửi qua AUTH_STATUS_CHAR để thông báo cho Mobile App.
+    """
+    UNAUTHENTICATED = 0  # Chưa xác thực, chờ nhập PIN
+    AUTHENTICATED = 1    # Xác thực thành công
+    INVALID_PIN = 2      # PIN sai
+
+
+class NetCheckStatus:
+    """
+    Enum cho trạng thái kiểm tra mạng.
+    Được gửi kèm với thông tin mạng qua NET_STATUS_CHAR.
+    """
+    IDLE = 0             # Chưa kiểm tra
+    CHECKING = 1         # Đang kiểm tra
+    COMPLETED = 2        # Kiểm tra hoàn tất
+    ERROR = 3            # Lỗi khi kiểm tra
+
+
+class ConnectionType:
+    """
+    Enum cho loại kết nối mạng.
+    """
+    NONE = "none"
+    WIFI = "wifi"
+    ETHERNET = "ethernet"
+    CELLULAR = "cellular"
+
+
+# Cấu hình WiFi Scan
+WIFI_SCAN_MAX_NETWORKS = 4  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
 
 # =============================================================================
 # CẤU HÌNH GPIO
@@ -75,7 +136,7 @@ WIFI_CONNECT_TIMEOUT = 30
 # Interface WiFi mặc định
 # - Jetson Nano/Orin Nano thường dùng: wlan0
 # - Có thể kiểm tra bằng lệnh: ip link show hoặc nmcli device
-WIFI_INTERFACE = "wlan0"
+WIFI_INTERFACE = "wlP1p1s0"
 
 # Số lần thử lại kết nối WiFi nếu thất bại
 WIFI_RETRY_COUNT = 3
