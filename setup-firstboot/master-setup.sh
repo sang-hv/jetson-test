@@ -2,13 +2,10 @@
 ###############################################################################
 #  Jetson Nano - Master Setup Script (orchestrator)
 #
-#  This script now runs 2 phases:
-#    1) install-software.sh  -> OS/software dependencies and binaries
-#    2) setup-services.sh    -> deploy files, service units, cronjobs
-#
 #  Usage:
-#    chmod +x master-setup.sh
-#    sudo ./master-setup.sh
+#    sudo ./master-setup.sh                          # Full setup (install + deploy + enable)
+#    sudo ./master-setup.sh --restart-all             # Restart ALL services
+#    sudo ./master-setup.sh network-watchdog go2rtc   # Restart specific services
 ###############################################################################
 
 set -euo pipefail
@@ -37,6 +34,23 @@ ACTUAL_UID=$(id -u "$ACTUAL_USER")
 
 export SCRIPT_DIR LOG_FILE ACTUAL_USER ACTUAL_HOME ACTUAL_UID
 
+if [ ! -f "$SCRIPT_DIR/setup-services.sh" ]; then
+    err "Missing file: $SCRIPT_DIR/setup-services.sh"
+    exit 1
+fi
+chmod +x "$SCRIPT_DIR/setup-services.sh"
+
+# ---------------------------------------------------------------------------
+# Restart mode: delegate to setup-services.sh
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--restart-all" ] || [ $# -gt 0 ]; then
+    bash "$SCRIPT_DIR/setup-services.sh" "$@"
+    exit $?
+fi
+
+# ---------------------------------------------------------------------------
+# Full setup mode (no args)
+# ---------------------------------------------------------------------------
 echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║   Jetson Nano - Master Setup                 ║"
@@ -52,18 +66,13 @@ if [ ! -f "$SCRIPT_DIR/install-software.sh" ]; then
     err "Missing file: $SCRIPT_DIR/install-software.sh"
     exit 1
 fi
-if [ ! -f "$SCRIPT_DIR/setup-services.sh" ]; then
-    err "Missing file: $SCRIPT_DIR/setup-services.sh"
-    exit 1
-fi
-
-chmod +x "$SCRIPT_DIR/install-software.sh" "$SCRIPT_DIR/setup-services.sh"
+chmod +x "$SCRIPT_DIR/install-software.sh"
 
 step "Phase 1/2: Install software"
 bash "$SCRIPT_DIR/install-software.sh"
 
 step "Phase 2/2: Setup files and services"
-bash "$SCRIPT_DIR/setup-services.sh" --setup
+bash "$SCRIPT_DIR/setup-services.sh"
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
