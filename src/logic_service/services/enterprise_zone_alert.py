@@ -76,9 +76,9 @@ async def process_ppe_violation_alert(payload: PPEViolationAlertPayload) -> dict
             detection_image_url=det.detection_result,
             confidence=det.confidence,
             object_attributes={
-                "helmet": "helmet" in det.violations if False else True,
-                "mask": "mask" in det.violations if False else True,
-                "glove": "glove" in det.violations if False else True,
+                "helmet": "helmet" in det.violations,
+                "mask": "mask" in det.violations,
+                "glove": "glove" in det.violations,
             },
         )
         processed += 1
