@@ -4,9 +4,9 @@
 # Phase 2: Deploy files, configure services, and install cron jobs.
 #
 # Usage:
-#   sudo ./setup-services.sh                          # Full setup (deploy + enable services)
-#   sudo ./setup-services.sh --restart-all             # Restart ALL services
-#   sudo ./setup-services.sh network-watchdog go2rtc   # Restart specific services
+#   sudo ./setup-services.sh                          # Deploy + enable all services
+#   sudo ./setup-services.sh --restart-all             # Deploy + enable + restart ALL services
+#   sudo ./setup-services.sh network-watchdog go2rtc   # Deploy + enable + restart specific services
 ###############################################################################
 
 set -euo pipefail
@@ -66,25 +66,15 @@ restart_service() {
 }
 
 # ---------------------------------------------------------------------------
-# Restart mode: --restart-all or specific service names
+# Determine restart mode (validate args BEFORE deploy to fail early)
 # ---------------------------------------------------------------------------
+RESTART_MODE="none"  # none | all | specific
+RESTART_TARGETS=()
+
 if [ "${1:-}" = "--restart-all" ]; then
-    step "Restarting all services"
-    while IFS= read -r svc; do
-        restart_service "$svc"
-    done < <(get_valid_services)
-    for f in "$SERVICES_DIR"/*.timer; do
-        [ -f "$f" ] || continue
-        _timer=$(basename "$f")
-        log "Restarting timer $_timer..."
-        systemctl restart "$_timer" 2>&1 \
-            && log "$_timer restarted" \
-            || err "Failed to restart $_timer"
-    done
-    log "All services restarted"
-    exit 0
+    RESTART_MODE="all"
 elif [ $# -gt 0 ]; then
-    # Validate all service names first
+    RESTART_MODE="specific"
     VALID_LIST=$(get_valid_services)
     for TARGET in "$@"; do
         FOUND=0
@@ -101,11 +91,7 @@ elif [ $# -gt 0 ]; then
             exit 1
         fi
     done
-    # All names valid — restart them
-    for TARGET in "$@"; do
-        restart_service "$TARGET"
-    done
-    exit 0
+    RESTART_TARGETS=("$@")
 fi
 
 # Recompute data paths for deployment summary
@@ -299,3 +285,27 @@ echo "    sim7600-4g      → sudo systemctl status sim7600-4g"
 echo "    net-watchdog    → sudo systemctl status network-watchdog"
 echo ""
 log "Phase 2 complete: files and services configured"
+
+# ---------------------------------------------------------------------------
+# Post-deploy: restart services if requested
+# ---------------------------------------------------------------------------
+if [ "$RESTART_MODE" = "all" ]; then
+    step "Restarting all services"
+    while IFS= read -r svc; do
+        restart_service "$svc"
+    done < <(get_valid_services)
+    for f in "$SERVICES_DIR"/*.timer; do
+        [ -f "$f" ] || continue
+        _timer=$(basename "$f")
+        log "Restarting timer $_timer..."
+        systemctl restart "$_timer" 2>&1 \
+            && log "$_timer restarted" \
+            || err "Failed to restart $_timer"
+    done
+    log "All services restarted"
+elif [ "$RESTART_MODE" = "specific" ]; then
+    step "Restarting requested services"
+    for TARGET in "${RESTART_TARGETS[@]}"; do
+        restart_service "$TARGET"
+    done
+fi

@@ -34,23 +34,6 @@ ACTUAL_UID=$(id -u "$ACTUAL_USER")
 
 export SCRIPT_DIR LOG_FILE ACTUAL_USER ACTUAL_HOME ACTUAL_UID
 
-if [ ! -f "$SCRIPT_DIR/setup-services.sh" ]; then
-    err "Missing file: $SCRIPT_DIR/setup-services.sh"
-    exit 1
-fi
-chmod +x "$SCRIPT_DIR/setup-services.sh"
-
-# ---------------------------------------------------------------------------
-# Restart mode: delegate to setup-services.sh
-# ---------------------------------------------------------------------------
-if [ "${1:-}" = "--restart-all" ] || [ $# -gt 0 ]; then
-    bash "$SCRIPT_DIR/setup-services.sh" "$@"
-    exit $?
-fi
-
-# ---------------------------------------------------------------------------
-# Full setup mode (no args)
-# ---------------------------------------------------------------------------
 echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║   Jetson Nano - Master Setup                 ║"
@@ -66,13 +49,17 @@ if [ ! -f "$SCRIPT_DIR/install-software.sh" ]; then
     err "Missing file: $SCRIPT_DIR/install-software.sh"
     exit 1
 fi
-chmod +x "$SCRIPT_DIR/install-software.sh"
+if [ ! -f "$SCRIPT_DIR/setup-services.sh" ]; then
+    err "Missing file: $SCRIPT_DIR/setup-services.sh"
+    exit 1
+fi
+chmod +x "$SCRIPT_DIR/install-software.sh" "$SCRIPT_DIR/setup-services.sh"
 
 step "Phase 1/2: Install software"
 bash "$SCRIPT_DIR/install-software.sh"
 
 step "Phase 2/2: Setup files and services"
-bash "$SCRIPT_DIR/setup-services.sh"
+bash "$SCRIPT_DIR/setup-services.sh" "$@"
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
