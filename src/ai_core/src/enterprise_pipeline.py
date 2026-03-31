@@ -100,6 +100,7 @@ class EnterprisePipeline(BasePipeline):
             }
             track_scores[tid] = compute_crop_score(person.bbox, frame.shape)
 
+        if self.counter is not None:
             self.counter.update(tracked_persons, frame, self._frame_count, track_infos, track_scores)
 
             crossings, _ = self.counter.process_lost_tracks(
@@ -243,6 +244,9 @@ class EnterprisePipeline(BasePipeline):
 
         for person in tracked_persons:
             tid = person.track_id
+
+            mask_status = self.track_manager.get_mask_status(tid)
+            print(f"[PPE DEBUG] tid={tid} mask_status={mask_status}")
 
             # Collect confirmed violations (False only — None means uncertain, skip)
             violations: List[str] = []
