@@ -262,8 +262,10 @@ class EnterprisePipeline(BasePipeline):
 
             # Only alert once per track entry — reset when track leaves frame
             if tid in self._ppe_alerted_tracks:
+                print(f"[PPE DEBUG] tid={tid} skip — already alerted this entry")
                 continue
             self._ppe_alerted_tracks.add(tid)
+            print(f"[PPE DEBUG] tid={tid} violations={violations} — sending ZMQ alert")
 
             label = self.track_manager.get_label(tid)
             track_info = self.track_manager.get_track_info(tid)

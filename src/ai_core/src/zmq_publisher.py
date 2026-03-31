@@ -153,8 +153,9 @@ class ZMQPublisher:
         try:
             payload = json.dumps(data, ensure_ascii=False).encode()
             self._socket.send_multipart([self.PPE_VIOLATION_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+            print(f"[ZMQ DEBUG] ppe_violation_alert sent: {data}")
         except zmq.Again:
-            pass
+            print("[ZMQ DEBUG] ppe_violation_alert DROPPED — no subscriber connected")
         except Exception as exc:
             logger.warning(f"ZMQPublisher PPE violation alert send failed: {exc}")
 
