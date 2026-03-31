@@ -72,6 +72,41 @@ sudo reboot
 1. **install-software.sh** - apt packages, swap (8GB), go2rtc, cloudflared, GStreamer plugins, Python venv
 2. **setup-services.sh** - deploys configs/scripts to system paths, creates `/etc/device/device.env`, enables all services, installs cronjobs
 
+## Service Management
+
+Both `master-setup.sh` and `setup-services.sh` support restart flags. All commands **always deploy + enable first**, then restart based on arguments.
+
+### setup-services.sh
+
+```bash
+# Deploy + enable only (no restart)
+sudo ./setup-services.sh
+
+# Deploy + enable + restart ALL services
+sudo ./setup-services.sh --restart-all
+
+# Deploy + enable + restart specific services
+sudo ./setup-services.sh network-watchdog go2rtc
+
+# Invalid service name → error + list valid services
+sudo ./setup-services.sh invalid-name
+```
+
+### master-setup.sh
+
+Same arguments, but also runs `install-software.sh` before `setup-services.sh`:
+
+```bash
+# Full setup (install + deploy + enable)
+sudo ./master-setup.sh
+
+# Full setup + restart ALL services
+sudo ./master-setup.sh --restart-all
+
+# Full setup + restart specific services
+sudo ./master-setup.sh network-watchdog go2rtc
+```
+
 ## Architecture Overview
 
 ```
