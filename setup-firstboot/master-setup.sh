@@ -63,7 +63,7 @@ step "Phase 1/2: Install software"
 bash "$SCRIPT_DIR/install-software.sh"
 
 step "Phase 2/2: Setup files and services"
-bash "$SCRIPT_DIR/setup-services.sh"
+bash "$SCRIPT_DIR/setup-services.sh" --setup
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"

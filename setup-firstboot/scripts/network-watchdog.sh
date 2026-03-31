@@ -441,7 +441,14 @@ main() {
 
             if [ $FAIL_COUNT -ge "$MAX_RETRIES" ]; then
                 err "Network down after $MAX_RETRIES checks — triggering self-heal"
-                heal_4g
+                # Only attempt 4G heal if 4G hardware is present
+                local HEAL_4G_IFACE
+                HEAL_4G_IFACE=$(get_iface_4g 2>/dev/null) || HEAL_4G_IFACE=""
+                if [ -n "$HEAL_4G_IFACE" ]; then
+                    heal_4g
+                else
+                    warn "No 4G interface detected — skipping sim7600-4g restart"
+                fi
                 sleep 5
                 ACTIVE_IFACE=$(check_connectivity "$NETWORK_MODE")
                 if [ $? -eq 0 ] && [ -n "$ACTIVE_IFACE" ]; then

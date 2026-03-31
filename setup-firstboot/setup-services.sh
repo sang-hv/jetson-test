@@ -2,6 +2,11 @@
 ###############################################################################
 # setup-services.sh
 # Phase 2: Deploy files, configure services, and install cron jobs.
+#
+# Usage:
+#   sudo ./setup-services.sh --setup       # Full setup (deploy + enable services)
+#   sudo ./setup-services.sh               # Restart ALL services
+#   sudo ./setup-services.sh <name>        # Restart a single service (e.g. network-watchdog)
 ###############################################################################
 
 set -euo pipefail
@@ -27,6 +32,82 @@ if [ "$EUID" -ne 0 ]; then
     err "It needs to be run with sudo/root"
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Restart mode: no args = restart all, <name> = restart one service
+# ---------------------------------------------------------------------------
+SERVICES_DIR="$SCRIPT_DIR/services"
+
+# Build list of valid service names from the services/ directory
+get_valid_services() {
+    local f name
+    for f in "$SERVICES_DIR"/*.service; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .service)
+        echo "$name"
+    done
+}
+
+restart_service() {
+    local name="$1"
+    if [ "$name" = "audio-autostart" ]; then
+        # User-level service
+        log "Restarting $name (user service for $ACTUAL_USER)..."
+        su - "$ACTUAL_USER" -c \
+            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 \
+            && log "$name restarted" \
+            || err "Failed to restart $name"
+    else
+        log "Restarting $name..."
+        systemctl restart "$name.service" 2>&1 \
+            && log "$name restarted" \
+            || err "Failed to restart $name"
+    fi
+}
+
+# If first arg is NOT --setup, enter restart mode
+if [ "${1:-}" != "--setup" ]; then
+    TARGET="${1:-}"
+
+    if [ -n "$TARGET" ]; then
+        # Restart a single service — validate name
+        FOUND=0
+        while IFS= read -r svc; do
+            if [ "$svc" = "$TARGET" ]; then
+                FOUND=1
+                break
+            fi
+        done < <(get_valid_services)
+
+        if [ "$FOUND" -eq 0 ]; then
+            err "Unknown service '$TARGET'. Valid services:"
+            get_valid_services | sed 's/^/  - /'
+            exit 1
+        fi
+
+        restart_service "$TARGET"
+    else
+        # Restart all services
+        step "Restarting all services"
+        while IFS= read -r svc; do
+            restart_service "$svc"
+        done < <(get_valid_services)
+        # Also restart timers
+        for f in "$SERVICES_DIR"/*.timer; do
+            [ -f "$f" ] || continue
+            _timer=$(basename "$f")
+            log "Restarting timer $_timer..."
+            systemctl restart "$_timer" 2>&1 \
+                && log "$_timer restarted" \
+                || err "Failed to restart $_timer"
+        done
+        log "All services restarted"
+    fi
+    exit 0
+fi
+
+# --setup mode: shift the flag and continue with full setup below
+shift
 
 # Recompute data paths for deployment summary
 if [ -d /data ]; then
