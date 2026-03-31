@@ -23,6 +23,7 @@ from .utils import (
     draw_counting_info,
     draw_counting_line,
     draw_in_zone_overlay,
+    draw_restricted_zone,
 )
 
 if TYPE_CHECKING:
@@ -131,6 +132,8 @@ class EnterprisePipeline(BasePipeline):
             frame = draw_counting_line(frame, pt1, pt2)
             in_count, out_count = self.counter.get_counts()
             frame = draw_counting_info(frame, in_count, out_count)
+        if self.config.restricted_zone is not None:
+            frame = draw_restricted_zone(frame, self.config.restricted_zone)
         return frame
 
     # ------------------------------------------------------------------

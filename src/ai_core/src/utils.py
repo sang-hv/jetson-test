@@ -516,6 +516,33 @@ def draw_detection_zone(
     return frame
 
 
+def draw_restricted_zone(
+    frame: np.ndarray,
+    zone: Tuple[float, float, float, float],
+    color: Tuple[int, int, int] = (0, 0, 255),
+    thickness: int = 2,
+    alpha: float = 0.15,
+) -> np.ndarray:
+    """Draw the restricted zone rectangle with a semi-transparent red fill."""
+    h, w = frame.shape[:2]
+    x1 = int(zone[0] * w)
+    y1 = int(zone[1] * h)
+    x2 = int(zone[2] * w)
+    y2 = int(zone[3] * h)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+    label = "RESTRICTED ZONE"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+    cv2.putText(frame, label, (x1 + 4, y1 + th + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+    return frame
+
+
 def draw_counting_line(
     frame: np.ndarray,
     pt1: Tuple[int, int],
