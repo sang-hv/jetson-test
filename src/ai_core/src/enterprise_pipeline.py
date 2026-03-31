@@ -262,7 +262,6 @@ class EnterprisePipeline(BasePipeline):
             self._ppe_alerted_tracks.add(tid)
 
             label = self.track_manager.get_label(tid)
-            age, gender = self.track_manager.get_age_gender(tid)
             track_info = self.track_manager.get_track_info(tid)
             confidence = track_info.get("avg_score") if track_info else None
             detection_result = self.detection_saver.save_frame_with_box(
@@ -273,8 +272,6 @@ class EnterprisePipeline(BasePipeline):
                 "track_id": tid,
                 "person_id": label,
                 "violations": violations,
-                "age": age,
-                "gender": gender,
                 "confidence": confidence,
                 "detection_result": detection_result,
             })
