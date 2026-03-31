@@ -169,6 +169,7 @@ class Config:
         import sqlite3 as _sqlite3
         _db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
         detection_zone: Optional[Tuple[float, float, float, float]] = None
+        restricted_zone: Optional[Tuple[float, float, float, float]] = None
 
         try:
             _conn = _sqlite3.connect(_db_path)
@@ -190,7 +191,6 @@ class Config:
                 print("[Config] No detection zone found in DB, using full frame")
 
             # Load restricted zone (alert when person enters this area)
-            restricted_zone: Optional[Tuple[float, float, float, float]] = None
             _res_row = _conn.execute(
                 "SELECT coordinates FROM detection_zones WHERE code = 'restricted' LIMIT 1"
             ).fetchone()
