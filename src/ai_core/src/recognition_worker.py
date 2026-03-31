@@ -199,16 +199,10 @@ class RecognitionWorker:
             threshold=self.threshold,
         )
 
-        # Run mask detection on face crop only if InsightFace detected a face
+        # Run mask detection on full person crop — mask YOLO detects faces itself
         mask_probability = None
-        if self.mask_detector is not None and self.mask_detector.is_enabled and match is not None:
-            x1, y1, x2, y2 = match.face_bbox
-            h, w = task.crop.shape[:2]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
-            if x2 > x1 and y2 > y1:
-                face_crop = task.crop[y1:y2, x1:x2]
-                mask_probability = self.mask_detector.get_mask_probability(face_crop)
+        if self.mask_detector is not None and self.mask_detector.is_enabled:
+            mask_probability = self.mask_detector.get_mask_probability(task.crop)
 
         # Run PPE detection on full person crop (helmet/glove)
         helmet_probability = None

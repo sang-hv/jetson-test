@@ -164,7 +164,7 @@ class MaskDetector:
             print(f"[MaskDetector] Detection error: {e}")
             return None, 0.0
 
-    def get_mask_probability(self, image: np.ndarray) -> float:
+    def get_mask_probability(self, image: np.ndarray) -> Optional[float]:
         """
         Get mask probability for image.
 
@@ -172,13 +172,12 @@ class MaskDetector:
             image: BGR image
 
         Returns:
-            Probability of wearing mask (0.0-1.0)
-            Returns 0.5 if detection is uncertain
+            Probability of wearing mask (0.0-1.0), or None if model could not detect anything
         """
         is_masked, confidence = self.detect(image)
 
         if is_masked is None:
-            return 0.5  # Uncertain
+            return None  # No detection — do not update history
 
         if is_masked:
             return confidence  # High = likely masked
