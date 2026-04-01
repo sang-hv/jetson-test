@@ -209,9 +209,10 @@ bring_up_interface() {
 main() {
     log "=== SIM7600G-H 4G Setup Start ==="
 
-    # Quick check: skip entirely if no USB modem device exists at all
-    if ! ls /dev/ttyUSB* &>/dev/null && ! lsusb 2>/dev/null | grep -iq "simcom\|sim7600\|qualcomm"; then
-        log "No 4G modem hardware detected — skipping setup"
+    # Quick check: skip if no /dev/ttyUSB* exists (lsusb can false-positive
+    # on Qualcomm USB IDs even when modem is not properly connected)
+    if ! ls /dev/ttyUSB* &>/dev/null; then
+        log "No /dev/ttyUSB* found — no 4G modem available, skipping setup"
         exit 0
     fi
 
