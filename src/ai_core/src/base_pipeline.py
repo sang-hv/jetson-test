@@ -130,6 +130,13 @@ class BasePipeline:
 
         self._frame_count = 0
 
+        # Per-frame detection results for GUI display (raw, not smoothed).
+        # Keyed by track_id. Populated each frame in main thread when detectors are enabled.
+        # Alerts and tracker still use confirmed state from TrackManager (unchanged).
+        self._frame_mask_status: Dict[int, Optional[bool]] = {}
+        self._frame_helmet_status: Dict[int, Optional[bool]] = {}
+        self._frame_glove_status: Dict[int, Optional[bool]] = {}
+
         # Load known faces database
         print("-" * 60)
         if config.face_db_source == "sqlite":
@@ -424,13 +431,79 @@ class BasePipeline:
             if tid in active_ids
         }
 
+    def _detect_mask_per_frame(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Run mask detection on each person crop in the main thread (per-frame).
+
+        Results are stored in _frame_mask_status for GUI display only.
+        Does NOT affect tracker smoothing or alert logic — those still use
+        confirmed_mask from TrackManager updated by RecognitionWorker.
+        """
+        if self.mask_detector is None or not self.mask_detector.is_enabled:
+            return
+
+        active_ids = set()
+        for person in tracked_persons:
+            tid = person.track_id
+            active_ids.add(tid)
+            crop = self._extract_person_crop(frame, person)
+            if crop is None:
+                self._frame_mask_status.pop(tid, None)
+                continue
+            prob = self.mask_detector.get_mask_probability(crop)
+            if prob is None:
+                self._frame_mask_status[tid] = None
+            else:
+                self._frame_mask_status[tid] = prob > 0.5
+
+        # Remove stale entries for tracks no longer in frame
+        self._frame_mask_status = {
+            tid: v for tid, v in self._frame_mask_status.items() if tid in active_ids
+        }
+
+    def _detect_ppe_per_frame(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Run PPE (helmet/glove) detection on each person crop in the main thread (per-frame).
+
+        Results are stored in _frame_helmet_status / _frame_glove_status for GUI display only.
+        Does NOT affect tracker smoothing or alert logic — those still use
+        confirmed state from TrackManager updated by RecognitionWorker.
+        """
+        if self.ppe_detector is None or not self.ppe_detector.is_enabled:
+            return
+
+        active_ids = set()
+        for person in tracked_persons:
+            tid = person.track_id
+            active_ids.add(tid)
+            crop = self._extract_person_crop(frame, person)
+            if crop is None:
+                self._frame_helmet_status.pop(tid, None)
+                self._frame_glove_status.pop(tid, None)
+                continue
+            helmet_prob, glove_prob = self.ppe_detector.get_probabilities(crop)
+            self._frame_helmet_status[tid] = (helmet_prob > 0.5) if helmet_prob is not None else None
+            self._frame_glove_status[tid] = (glove_prob > 0.5) if glove_prob is not None else None
+
+        # Remove stale entries for tracks no longer in frame
+        self._frame_helmet_status = {
+            tid: v for tid, v in self._frame_helmet_status.items() if tid in active_ids
+        }
+        self._frame_glove_status = {
+            tid: v for tid, v in self._frame_glove_status.items() if tid in active_ids
+        }
+
     def _draw_person(self, frame: np.ndarray, person: TrackedPerson) -> np.ndarray:
         """Draw a single tracked person with all attributes."""
         label = self.track_manager.get_label(person.track_id)
-        mask_status = self.track_manager.get_mask_status(person.track_id)
+        tid = person.track_id
+        # Use per-frame results for display if available, else fall back to tracker
+        mask_status = self._frame_mask_status.get(tid, self.track_manager.get_mask_status(tid))
+        helmet_status = self._frame_helmet_status.get(tid, self.track_manager.get_helmet_status(tid))
+        glove_status = self._frame_glove_status.get(tid, self.track_manager.get_glove_status(tid))
         age, gender = self.track_manager.get_age_gender(person.track_id)
-        helmet_status = self.track_manager.get_helmet_status(person.track_id)
-        glove_status = self.track_manager.get_glove_status(person.track_id)
         return draw_tracked_person(
             frame, person, label,
             mask_status=mask_status,
@@ -475,6 +548,10 @@ class BasePipeline:
 
         # 3. Submit recognition tasks to worker queue (non-blocking)
         self._submit_recognition_tasks(tracked_persons, frame)
+
+        # 3b. Run mask/PPE detection per-frame in main thread for immediate GUI display
+        self._detect_mask_per_frame(tracked_persons, frame)
+        self._detect_ppe_per_frame(tracked_persons, frame)
 
         # 4. Draw labels
         for person in tracked_persons:
