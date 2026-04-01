@@ -9,6 +9,7 @@ WorkingDirectory=/opt/stream_auth
 ExecStart=/usr/bin/python3 /opt/stream_auth/server.py
 Restart=always
 RestartSec=5
+TimeoutStopSec=5
 
 Environment=PYTHONUNBUFFERED=1
 Environment=AUTH_DB_PATH=/data/mini-pc/db/logic_service.db

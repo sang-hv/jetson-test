@@ -23,6 +23,7 @@ ExecStartPre=/bin/bash -c '\
 ExecStart=/bin/bash /opt/backchannel/start.sh
 Restart=always
 RestartSec=5
+TimeoutStopSec=5
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
