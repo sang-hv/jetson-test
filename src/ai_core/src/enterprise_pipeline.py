@@ -51,8 +51,8 @@ class EnterprisePipeline(BasePipeline):
         self._restricted_alert_last_notified: Dict[int, float] = {}
         self._restricted_alert_cooldown: float = 10.0  # seconds
 
-        # PPE violation alert: tracks that have already been alerted (reset when track leaves frame)
-        self._ppe_alerted_tracks: set = set()
+        # PPE violation alert: maps track_id → set of violation types already alerted (reset when track leaves frame)
+        self._ppe_alerted_tracks: Dict[int, set] = {}
 
         if config.ppe_violation_alert_enabled:
             items = []
@@ -115,7 +115,7 @@ class EnterprisePipeline(BasePipeline):
             tid: t for tid, t in self._employee_crossing_last_notified.items()
             if tid in active_set
         }
-        self._ppe_alerted_tracks = {tid for tid in self._ppe_alerted_tracks if tid in active_set}
+        self._ppe_alerted_tracks = {tid: v for tid, v in self._ppe_alerted_tracks.items() if tid in active_set}
 
         # Restricted zone: alert when any person enters the restricted area
         if self.config.restricted_zone is not None and self.zmq_publisher is not None:
@@ -260,12 +260,18 @@ class EnterprisePipeline(BasePipeline):
             if not violations:
                 continue
 
-            # Only alert once per track entry — reset when track leaves frame
-            if tid in self._ppe_alerted_tracks:
-                print(f"[PPE DEBUG] tid={tid} skip — already alerted this entry")
+            # Filter out violation types already alerted for this track
+            already_alerted = self._ppe_alerted_tracks.get(tid, set())
+            new_violations = [v for v in violations if v not in already_alerted]
+
+            if not new_violations:
+                print(f"[PPE DEBUG] tid={tid} skip — all violations already alerted: {already_alerted}")
                 continue
-            self._ppe_alerted_tracks.add(tid)
-            print(f"[PPE DEBUG] tid={tid} violations={violations} — sending ZMQ alert")
+
+            # Record newly alerted violation types
+            self._ppe_alerted_tracks.setdefault(tid, set()).update(new_violations)
+            violations = new_violations
+            print(f"[PPE DEBUG] tid={tid} new_violations={new_violations} — sending ZMQ alert")
 
             label = self.track_manager.get_label(tid)
             track_info = self.track_manager.get_track_info(tid)
