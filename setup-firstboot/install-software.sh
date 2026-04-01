@@ -58,6 +58,11 @@ apt-get install -y -qq \
     2>&1 | tail -8 | tee -a "$LOG_FILE"
 log "Base software packages installed"
 
+# Remove unnecessary services that waste CPU/RAM on edge devices
+apt-get remove -y -qq tracker-miner-fs apport 2>&1 | tail -3 | tee -a "$LOG_FILE" || true
+apt-get autoremove -y -qq 2>&1 | tail -1 | tee -a "$LOG_FILE" || true
+log "Removed tracker-miner-fs (file indexer) and apport (crash reporter)"
+
 step "Phase 2/7: Storage and directories"
 if [ -d /data ]; then
     DATA_DIR="/data/mini-pc"
