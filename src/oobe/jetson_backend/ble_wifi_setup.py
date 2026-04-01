@@ -628,9 +628,17 @@ if DBUS_AVAILABLE:
 
         Flags: write, write-without-response
 
-        Giá trị ghi:
-        - 1: Bắt đầu kiểm tra mạng
+        Giá trị ghi (1 byte — loại mạng cần kiểm tra):
+        - 1: LTE / Cellular
+        - 2: WiFi
+        - 3: LAN / Ethernet
         """
+
+        NET_TYPE_MAP = {
+            1: ConnectionType.CELLULAR,
+            2: ConnectionType.WIFI,
+            3: ConnectionType.ETHERNET,
+        }
 
         def __init__(self, bus, index, service, net_status_handler, auth_manager):
             Characteristic.__init__(
@@ -646,9 +654,12 @@ if DBUS_AVAILABLE:
             if not self.auth_manager.is_authenticated:
                 logger.warning("Net check write bị từ chối: chưa xác thực")
                 return
-            if len(value) > 0 and value[0] == 1:
-                logger.info("Nhận lệnh kiểm tra mạng")
-                self.net_status_handler.start_check()
+            if len(value) > 0 and value[0] in self.NET_TYPE_MAP:
+                net_type = self.NET_TYPE_MAP[value[0]]
+                logger.info(f"Nhận lệnh kiểm tra mạng: {net_type}")
+                self.net_status_handler.start_check(net_type)
+            else:
+                logger.warning(f"Net check write: giá trị không hợp lệ: {value[0] if value else 'empty'}")
 
 
     class NetStatusCharacteristic(Characteristic):
@@ -958,8 +969,8 @@ class NetStatusHandler:
         self._check_thread: Optional[threading.Thread] = None
         self._checking = False
 
-    def start_check(self):
-        """Bắt đầu kiểm tra trạng thái mạng."""
+    def start_check(self, net_type: str):
+        """Bắt đầu kiểm tra trạng thái mạng theo loại chỉ định."""
         if self._checking:
             logger.warning("Đang kiểm tra mạng, bỏ qua yêu cầu mới")
             return
@@ -967,17 +978,18 @@ class NetStatusHandler:
         self._checking = True
         self._check_thread = threading.Thread(
             target=self._perform_check,
+            args=(net_type,),
             daemon=True
         )
         self._check_thread.start()
 
-    def _perform_check(self):
+    def _perform_check(self, net_type: str):
         """
         Thực hiện kiểm tra mạng.
 
         Được chạy trong thread riêng để không block BLE.
         """
-        logger.info("Bắt đầu kiểm tra trạng thái mạng...")
+        logger.info(f"Bắt đầu kiểm tra trạng thái mạng: {net_type}")
 
         # Thông báo đang kiểm tra
         if self.net_status_chrc:
@@ -987,7 +999,7 @@ class NetStatusHandler:
 
         try:
             # Thực hiện kiểm tra
-            net_info = get_network_status()
+            net_info = get_network_status(net_type=net_type)
 
             logger.info(f"Kiểm tra hoàn tất: connected={net_info['connected']}, type={net_info['type']}")
 

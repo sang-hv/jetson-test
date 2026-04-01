@@ -67,7 +67,14 @@ def check_internet_connection() -> bool:
         return False
 
 
-def get_network_status() -> dict:
+_NET_TYPE_TO_NMCLI = {
+    "wifi": "wifi",
+    "ethernet": "ethernet",
+    "cellular": "gsm",
+}
+
+
+def get_network_status(net_type: str = None) -> dict:
     """
     Kiểm tra trạng thái kết nối mạng hiện tại của hệ thống.
 
@@ -76,6 +83,10 @@ def get_network_status() -> dict:
     - Loại kết nối: wifi, ethernet, cellular, none
     - Interface đang sử dụng
     - Chi tiết kết nối (SSID nếu WiFi, tên connection nếu khác)
+
+    Args:
+        net_type: Lọc theo loại mạng ("wifi", "ethernet", "cellular").
+                  None = kiểm tra tất cả, ưu tiên ethernet > wifi > cellular.
 
     Returns:
         dict: {"connected": bool, "type": str, "interface": str, "details": str}
@@ -107,8 +118,14 @@ def get_network_status() -> dict:
                     "connection": parts[3]
                 })
 
+        # Lọc theo loại mạng yêu cầu nếu có
+        if net_type:
+            nmcli_type = _NET_TYPE_TO_NMCLI.get(net_type)
+            if nmcli_type:
+                active_connections = [c for c in active_connections if c["type"] == nmcli_type]
+
         if not active_connections:
-            logger.info("Không có kết nối mạng nào đang active")
+            logger.info(f"Không có kết nối {net_type or 'mạng'} nào đang active")
             return result
 
         # Map nmcli types sang ConnectionType và sắp xếp theo ưu tiên
