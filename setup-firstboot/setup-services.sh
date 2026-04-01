@@ -50,6 +50,13 @@ get_valid_services() {
 
 restart_service() {
     local name="$1"
+    # Skip sim7600-4g if no modem hardware present (avoids 65s+ hang)
+    if [ "$name" = "sim7600-4g" ]; then
+        if ! ls /dev/ttyUSB* &>/dev/null 2>&1 && ! lsusb 2>/dev/null | grep -iq "simcom\|sim7600\|qualcomm"; then
+            warn "Skipping $name — no 4G modem hardware detected"
+            return 0
+        fi
+    fi
     if [ "$name" = "audio-autostart" ]; then
         # User-level service
         log "Restarting $name (user service for $ACTUAL_USER)..."
