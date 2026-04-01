@@ -47,10 +47,13 @@ from config import (
     AUTH_STATUS_CHAR_UUID,
     NET_CHECK_CHAR_UUID,
     NET_STATUS_CHAR_UUID,
+    NET_SETUP_CHAR_UUID,
+    NET_SETUP_STATUS_CHAR_UUID,
     WiFiStatus,
     WiFiScanStatus,
     AuthStatus,
     NetCheckStatus,
+    NetSetupStatus,
     ConnectionType,
     WIFI_SCAN_MAX_NETWORKS,
     PIN_CODE,
@@ -59,7 +62,10 @@ from config import (
 )
 
 # Import các module khác
-from wifi_manager import check_internet_connection, connect_wifi, scan_wifi_networks, get_network_status
+from wifi_manager import (
+    check_internet_connection, connect_wifi, scan_wifi_networks,
+    get_network_status, setup_network_connection
+)
 from gpio_handler import get_gpio_handler
 
 # Thử import thư viện BLE
@@ -720,11 +726,73 @@ if DBUS_AVAILABLE:
             return dbus.Array(self.value, signature='y')
 
 
+    class NetSetupCharacteristic(Characteristic):
+        """
+        Write characteristic để app yêu cầu kết nối LTE hoặc LAN.
+
+        Flags: write, write-without-response
+        Giá trị: UTF-8 string "lte" hoặc "lan"
+        Yêu cầu xác thực PIN trước khi ghi.
+        """
+
+        def __init__(self, bus, index, service, net_setup_handler, auth_manager):
+            Characteristic.__init__(
+                self, bus, index, NET_SETUP_CHAR_UUID,
+                ['write', 'write-without-response'],
+                service
+            )
+            self.net_setup_handler = net_setup_handler
+            self.auth_manager = auth_manager
+            logger.info(f"Tạo Net Setup Characteristic: {NET_SETUP_CHAR_UUID}")
+
+        def WriteValue(self, value, options):
+            if not self.auth_manager.is_authenticated:
+                logger.warning("Net setup write bị từ chối: chưa xác thực PIN")
+                return
+            net_type = bytes(value).decode('utf-8').strip().lower()
+            if net_type not in ("lte", "lan"):
+                logger.warning(f"Net setup: loại mạng không hợp lệ '{net_type}'")
+                return
+            logger.info(f"Nhận yêu cầu setup mạng: {net_type}")
+            self.net_setup_handler.start_setup(net_type)
+
+
+    class NetSetupStatusCharacteristic(Characteristic):
+        """
+        Read/Notify characteristic báo trạng thái setup LTE/LAN.
+
+        Flags: read, notify
+        Giá trị: 1 byte
+          0 = WAITING    (chờ yêu cầu)
+          1 = CONNECTING (đang kết nối)
+          2 = SUCCESS    (thành công)
+          3 = ERROR      (thất bại)
+        """
+
+        def __init__(self, bus, index, service):
+            Characteristic.__init__(
+                self, bus, index, NET_SETUP_STATUS_CHAR_UUID,
+                ['read', 'notify'],
+                service
+            )
+            self.value = [NetSetupStatus.WAITING]
+            logger.info(f"Tạo Net Setup Status Characteristic: {NET_SETUP_STATUS_CHAR_UUID}")
+
+        def set_status(self, status: int):
+            logger.info(f"Net setup status: {status}")
+            self.value = [status]
+            self.notify_value(self.value)
+
+        def ReadValue(self, options):
+            logger.debug("Đọc net setup status characteristic")
+            return dbus.Array(self.value, signature='y')
+
+
     class WiFiSetupService(Service):
         """
         GATT Service chính cho WiFi Setup.
 
-        Chứa 9 characteristics:
+        Chứa 11 characteristics:
         - SSID (write): Nhận tên WiFi từ app
         - Password (write): Nhận mật khẩu WiFi từ app
         - Status (read, notify): Trạng thái kết nối WiFi
@@ -734,9 +802,12 @@ if DBUS_AVAILABLE:
         - Auth Status (read, notify): Trạng thái xác thực
         - Net Check (write): Trigger kiểm tra mạng
         - Net Status (read, notify): Trạng thái mạng hiện tại
+        - Net Setup (write): Yêu cầu kết nối LTE hoặc LAN
+        - Net Setup Status (read, notify): Trạng thái setup LTE/LAN
         """
 
-        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler, auth_manager, net_status_handler):
+        def __init__(self, bus, index, wifi_setup_handler, wifi_scan_handler,
+                     auth_manager, net_status_handler, net_setup_handler):
             Service.__init__(self, bus, index, SERVICE_UUID, True)
 
             # Characteristics cho WiFi
@@ -754,6 +825,10 @@ if DBUS_AVAILABLE:
             self.net_check_chrc = NetCheckCharacteristic(bus, 7, self, net_status_handler, auth_manager)
             self.net_status_chrc = NetStatusCharacteristic(bus, 8, self)
 
+            # Characteristics cho LTE/LAN Network Setup
+            self.net_setup_chrc = NetSetupCharacteristic(bus, 9, self, net_setup_handler, auth_manager)
+            self.net_setup_status_chrc = NetSetupStatusCharacteristic(bus, 10, self)
+
             # Thêm tất cả vào service
             self.add_characteristic(self.ssid_chrc)
             self.add_characteristic(self.pwd_chrc)
@@ -764,12 +839,15 @@ if DBUS_AVAILABLE:
             self.add_characteristic(self.auth_status_chrc)
             self.add_characteristic(self.net_check_chrc)
             self.add_characteristic(self.net_status_chrc)
+            self.add_characteristic(self.net_setup_chrc)
+            self.add_characteristic(self.net_setup_status_chrc)
 
             # Lưu reference để cập nhật status
             wifi_setup_handler.status_chrc = self.status_chrc
             wifi_scan_handler.wifi_list_chrc = self.wifi_list_chrc
             auth_manager.auth_status_chrc = self.auth_status_chrc
             net_status_handler.net_status_chrc = self.net_status_chrc
+            net_setup_handler.net_setup_status_chrc = self.net_setup_status_chrc
 
             logger.info(f"Tạo WiFi Setup Service: {SERVICE_UUID}")
 
@@ -969,7 +1047,7 @@ class NetStatusHandler:
         self._check_thread: Optional[threading.Thread] = None
         self._checking = False
 
-    def start_check(self, net_type: str):
+    def start_check(self, net_type: str = None):
         """Bắt đầu kiểm tra trạng thái mạng theo loại chỉ định."""
         if self._checking:
             logger.warning("Đang kiểm tra mạng, bỏ qua yêu cầu mới")
@@ -1019,6 +1097,75 @@ class NetStatusHandler:
                 )
         finally:
             self._checking = False
+
+
+# =============================================================================
+# NET SETUP HANDLER
+# =============================================================================
+
+class NetSetupHandler:
+    """
+    Handler xử lý việc kết nối LTE hoặc LAN theo yêu cầu từ BLE.
+
+    Nhận net_type ("lte" hoặc "lan") từ NetSetupCharacteristic,
+    chạy setup_network_connection() trong daemon thread,
+    và cập nhật trạng thái qua NetSetupStatusCharacteristic.
+    """
+
+    def __init__(self, mainloop=None):
+        self.net_setup_status_chrc = None  # Sẽ được set bởi WiFiSetupService
+        self.mainloop = mainloop
+        self._setup_thread: Optional[threading.Thread] = None
+
+    def start_setup(self, net_type: str):
+        """Bắt đầu setup mạng trong background thread."""
+        if self._setup_thread and self._setup_thread.is_alive():
+            logger.warning("Net setup đang chạy, bỏ qua yêu cầu mới")
+            return
+
+        self._setup_thread = threading.Thread(
+            target=self._perform_setup,
+            args=(net_type,),
+            daemon=True
+        )
+        self._setup_thread.start()
+
+    def _perform_setup(self, net_type: str):
+        """
+        Thực hiện kết nối mạng trong thread riêng.
+        Dùng GLib.idle_add() để cập nhật BLE characteristic an toàn.
+        """
+        logger.info(f"Bắt đầu setup mạng: {net_type}")
+
+        if self.net_setup_status_chrc:
+            GLib.idle_add(
+                lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.CONNECTING)
+            )
+
+        success, message = setup_network_connection(net_type)
+
+        if success:
+            logger.info(f"Setup mạng thành công: {message}")
+            if self.net_setup_status_chrc:
+                GLib.idle_add(
+                    lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.SUCCESS)
+                )
+            # Chờ app đọc trạng thái SUCCESS rồi thoát BLE server
+            time.sleep(3)
+            if self.mainloop:
+                GLib.idle_add(self.mainloop.quit)
+        else:
+            logger.error(f"Setup mạng thất bại: {message}")
+            if self.net_setup_status_chrc:
+                GLib.idle_add(
+                    lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.ERROR)
+                )
+            # Reset về WAITING sau 5 giây để app có thể thử lại
+            time.sleep(5)
+            if self.net_setup_status_chrc:
+                GLib.idle_add(
+                    lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.WAITING)
+                )
 
 
 # =============================================================================
@@ -1100,7 +1247,8 @@ class BLEServer:
         self.wifi_scan_handler = None
         self.auth_manager = None
         self.net_status_handler = None
-        
+        self.net_setup_handler = None
+
     def _find_adapter(self):
         """Tìm BLE adapter (hciX)."""
         obj_manager = dbus.Interface(
@@ -1158,11 +1306,14 @@ class BLEServer:
             # Tạo Net Status handler
             self.net_status_handler = NetStatusHandler()
 
+            # Tạo Net Setup handler (LTE/LAN)
+            self.net_setup_handler = NetSetupHandler(self.mainloop)
+
             # Tạo và đăng ký Application (GATT Services)
             self.app = Application(self.bus)
             wifi_service = WiFiSetupService(
                 self.bus, 0, self.wifi_handler, self.wifi_scan_handler,
-                self.auth_manager, self.net_status_handler
+                self.auth_manager, self.net_status_handler, self.net_setup_handler
             )
             self.app.add_service(wifi_service)
             

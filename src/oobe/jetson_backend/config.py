@@ -43,6 +43,10 @@ AUTH_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef7"  # Read/Notify: t
 NET_CHECK_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef8"   # Write: trigger kiểm tra mạng
 NET_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef9"  # Read/Notify: trạng thái mạng (JSON)
 
+# UUID cho Network Setup (LTE / LAN)
+NET_SETUP_CHAR_UUID        = "12345678-1234-5678-1234-56789abcdefa"  # Write: gửi loại mạng ("lte"/"lan")
+NET_SETUP_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdefb"  # Read/Notify: trạng thái setup
+
 # Mã PIN cố định cho xác thực kết nối BLE
 PIN_CODE = "123456"
 
@@ -93,6 +97,17 @@ class NetCheckStatus:
     ERROR = 3            # Lỗi khi kiểm tra
 
 
+class NetSetupStatus:
+    """
+    Enum cho trạng thái setup mạng LTE/LAN.
+    Được gửi qua NET_SETUP_STATUS_CHAR để thông báo cho Mobile App.
+    """
+    WAITING    = 0   # Chờ yêu cầu từ app
+    CONNECTING = 1   # Đang thực hiện kết nối
+    SUCCESS    = 2   # Kết nối thành công
+    ERROR      = 3   # Kết nối thất bại
+
+
 class ConnectionType:
     """
     Enum cho loại kết nối mạng.
@@ -132,6 +147,10 @@ BUTTON_HOLD_TIME = 3.0
 
 # Timeout khi kết nối WiFi (tính bằng giây)
 WIFI_CONNECT_TIMEOUT = 30
+
+# Timeout cho LAN và LTE setup
+LAN_CONNECT_TIMEOUT = 15   # DHCP trên Ethernet thường nhanh
+LTE_CONNECT_TIMEOUT = 60   # Modem cần thời gian khởi động và kết nối bearer
 
 # Interface WiFi mặc định
 # - Jetson Nano/Orin Nano thường dùng: wlan0

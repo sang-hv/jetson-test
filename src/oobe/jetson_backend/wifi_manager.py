@@ -23,7 +23,9 @@ from config import (
     WIFI_RETRY_COUNT,
     INTERNET_CHECK_HOST,
     INTERNET_CHECK_PORT,
-    INTERNET_CHECK_TIMEOUT
+    INTERNET_CHECK_TIMEOUT,
+    LAN_CONNECT_TIMEOUT,
+    LTE_CONNECT_TIMEOUT,
 )
 
 # Thiết lập logger
@@ -242,6 +244,126 @@ def get_wifi_interface() -> str:
     # Fallback về cấu hình mặc định (wlan0)
     logger.info(f"Sử dụng WiFi interface mặc định: {WIFI_INTERFACE}")
     return WIFI_INTERFACE
+
+
+def get_ethernet_interface() -> Optional[str]:
+    """
+    Tự động phát hiện interface Ethernet (LAN) khả dụng.
+
+    Sử dụng nmcli để liệt kê thiết bị, lọc type == "ethernet".
+    Tương thích với cả chuẩn đặt tên Linux (eth*, eno*, enp*) và
+    Jetson PCIe (enP*).
+
+    Returns:
+        str: Tên interface (ví dụ: 'eth0', 'enP3p1s0'), hoặc None nếu không tìm thấy.
+    """
+    try:
+        cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[1] == "ethernet":
+                    logger.info(f"Phát hiện Ethernet interface: {parts[0]}")
+                    return parts[0]
+    except Exception as e:
+        logger.warning(f"Lỗi khi phát hiện Ethernet interface: {e}")
+    return None
+
+
+def setup_network_connection(net_type: str) -> Tuple[bool, str]:
+    """
+    Kết nối device vào mạng LAN (Ethernet) hoặc LTE (cellular modem).
+
+    Args:
+        net_type: "lan" hoặc "lte"
+
+    Returns:
+        Tuple[bool, str]: (thành_công, thông_báo)
+    """
+    if net_type == "lan":
+        return _setup_lan(LAN_CONNECT_TIMEOUT)
+    elif net_type == "lte":
+        return _setup_lte(LTE_CONNECT_TIMEOUT)
+    else:
+        return False, f"Loại mạng không hợp lệ: {net_type}"
+
+
+def _setup_lan(timeout: int) -> Tuple[bool, str]:
+    """Kết nối LAN qua Ethernet interface."""
+    iface = get_ethernet_interface()
+    if not iface:
+        return False, "Không tìm thấy Ethernet interface"
+
+    logger.info(f"Kết nối LAN qua interface: {iface}")
+    try:
+        result = subprocess.run(
+            ["nmcli", "device", "connect", iface],
+            capture_output=True, text=True, timeout=timeout
+        )
+        if result.returncode != 0:
+            logger.error(f"nmcli device connect thất bại: {result.stderr.strip()}")
+            return False, f"Kết nối LAN thất bại: {result.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        return False, f"LAN connect timeout sau {timeout}s"
+    except Exception as e:
+        return False, f"Lỗi kết nối LAN: {e}"
+
+    # Chờ DHCP ổn định
+    time.sleep(2)
+
+    if check_internet_connection():
+        logger.info(f"LAN kết nối thành công qua {iface}")
+        return True, f"LAN đã kết nối qua {iface}"
+
+    # Có thể là LAN nội bộ (không có internet) — vẫn coi là thành công
+    logger.warning(f"LAN interface {iface} đã kết nối nhưng không có internet")
+    return True, f"LAN đã kết nối qua {iface} (không có internet)"
+
+
+def _setup_lte(timeout: int) -> Tuple[bool, str]:
+    """Kết nối LTE qua SIM7600 modem."""
+    logger.info("Khởi động LTE modem via sim7600-4g.service")
+    try:
+        subprocess.run(
+            ["systemctl", "restart", "sim7600-4g.service"],
+            capture_output=True, text=True, timeout=15
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("systemctl restart timeout, tiếp tục poll interface...")
+    except Exception as e:
+        logger.warning(f"systemctl restart lỗi: {e}, tiếp tục poll interface...")
+
+    # Poll chờ modem interface xuất hiện
+    deadline = time.time() + timeout
+    iface_found = None
+    while time.time() < deadline:
+        try:
+            cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            for line in proc.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2:
+                    dev, dev_type = parts[0], parts[1]
+                    if dev_type == "gsm" or dev.startswith("usb") or dev.startswith("wwan"):
+                        iface_found = dev
+                        break
+            if iface_found:
+                break
+        except Exception:
+            pass
+        time.sleep(2)
+
+    if not iface_found:
+        return False, f"Không tìm thấy LTE interface sau {timeout}s"
+
+    logger.info(f"LTE interface xuất hiện: {iface_found}")
+
+    if check_internet_connection():
+        logger.info("LTE kết nối thành công, có internet")
+        return True, f"LTE đã kết nối qua {iface_found}"
+
+    return False, f"LTE interface {iface_found} đã lên nhưng không có internet"
 
 
 def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
