@@ -125,6 +125,33 @@ for plugin in h264parse voaacenc mpegtsmux jpegdec x264enc; do
     fi
 done
 
+# Fix NVIDIA CSI camera: nvarguscamerasrc needs both standard libjpeg (jpeg_set_defaults)
+# and NVIDIA's libnvjpeg (jpeg_set_hardware_acceleration_parameters_enc).
+# Without preload, apt autoremove can break the link and kill the camera pipeline.
+PRELOAD_FILE="/etc/ld.so.preload"
+PRELOAD_LIBS=(
+    "/lib/aarch64-linux-gnu/libjpeg.so.8"
+    "/usr/lib/aarch64-linux-gnu/nvidia/libnvjpeg.so"
+)
+if [ ! -f "/lib/aarch64-linux-gnu/libjpeg.so.8" ]; then
+    log "Installing libjpeg-turbo8..."
+    apt-get install -y -qq libjpeg-turbo8 2>&1 | tail -1 | tee -a "$LOG_FILE"
+fi
+if [ ! -f "/usr/lib/aarch64-linux-gnu/nvidia/libnvjpeg.so" ]; then
+    log "Installing nvidia-l4t-multimedia..."
+    apt-get install -y -qq nvidia-l4t-multimedia 2>&1 | tail -1 | tee -a "$LOG_FILE"
+fi
+for lib in "${PRELOAD_LIBS[@]}"; do
+    if [ ! -f "$lib" ]; then
+        warn "Missing $lib after install — nvarguscamerasrc (CSI camera) may not work"
+        continue
+    fi
+    if ! grep -qF "$lib" "$PRELOAD_FILE" 2>/dev/null; then
+        echo "$lib" | tee -a "$PRELOAD_FILE" >/dev/null
+        log "Added to ld.so.preload: $lib"
+    fi
+done
+
 step "Phase 6/7: go2rtc"
 if [ -f /usr/local/bin/go2rtc ]; then
     log "go2rtc already installed"
