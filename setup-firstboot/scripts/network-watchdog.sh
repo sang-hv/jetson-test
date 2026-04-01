@@ -158,6 +158,47 @@ iface_has_ip() {
     ip addr show "$IFACE" 2>/dev/null | grep -q "inet "
 }
 
+# Get gateway for an interface. Tries: routing table → NetworkManager → guess .1
+get_gateway() {
+    local IFACE="$1"
+    local GW=""
+
+    # 1) From existing default route
+    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
+    [ -n "$GW" ] && echo "$GW" && return 0
+
+    # 2) From NetworkManager (reliable even when route was deleted)
+    if command -v nmcli &>/dev/null; then
+        local CON_NAME
+        CON_NAME=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
+            | grep ":${IFACE}$" | head -1 | cut -d: -f1)
+        if [ -n "$CON_NAME" ]; then
+            GW=$(nmcli -t -f IP4.GATEWAY connection show "$CON_NAME" 2>/dev/null \
+                | cut -d: -f2 | tr -d ' ' | head -1)
+            [ -n "$GW" ] && [ "$GW" != "--" ] && echo "$GW" && return 0
+        fi
+        # Also try device level
+        GW=$(nmcli -t -f IP4.GATEWAY device show "$IFACE" 2>/dev/null \
+            | cut -d: -f2 | tr -d ' ' | head -1)
+        [ -n "$GW" ] && [ "$GW" != "--" ] && echo "$GW" && return 0
+    fi
+
+    # 3) From non-default routes (e.g. subnet routes with a gateway)
+    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep -oP 'via \K\S+' | head -1)
+    [ -n "$GW" ] && echo "$GW" && return 0
+
+    # 4) Fallback: guess .1 from interface IP
+    local IP
+    IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
+    if [ -n "$IP" ]; then
+        GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
+        echo "$GW"
+        return 0
+    fi
+
+    return 1
+}
+
 iface_can_ping() {
     local IFACE="$1"
     local HOST="${2:-$PING_HOST}"
@@ -165,12 +206,7 @@ iface_can_ping() {
     # Temporarily add a host route via this interface's gateway to ensure
     # ping actually goes through it (avoids death spiral when metric is high).
     local GW TMP_ROUTE=0
-    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
-    if [ -z "$GW" ]; then
-        local IP
-        IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
-        [ -n "$IP" ] && GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
-    fi
+    GW=$(get_gateway "$IFACE") || GW=""
     if [ -n "$GW" ]; then
         ip route add "$HOST" via "$GW" dev "$IFACE" metric 10 2>/dev/null && TMP_ROUTE=1
     fi
@@ -291,17 +327,9 @@ set_metric() {
     # 1) Tell NetworkManager to use this metric (prevents NM from overwriting)
     nm_set_route_metric "$IFACE" "$METRIC"
 
-    # 2) Capture gateway before deleting routes
+    # 2) Capture gateway BEFORE deleting routes (get_gateway checks route table, NM, fallback)
     local GW
-    GW=$(ip route show dev "$IFACE" 2>/dev/null | grep "^default" | grep -oP 'via \K\S+' | head -1)
-
-    if [ -z "$GW" ]; then
-        local IP
-        IP=$(ip addr show "$IFACE" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1 | head -1)
-        if [ -n "$IP" ]; then
-            GW=$(echo "$IP" | awk -F. '{print $1"."$2"."$3".1"}')
-        fi
-    fi
+    GW=$(get_gateway "$IFACE") || GW=""
 
     # 3) Remove ALL default routes for this interface (not just known metrics)
     while ip route del default dev "$IFACE" 2>/dev/null; do :; done
