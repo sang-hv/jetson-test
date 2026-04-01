@@ -50,18 +50,17 @@ get_valid_services() {
 
 restart_service() {
     local name="$1"
-    # Skip sim7600-4g if no modem hardware present (avoids 65s+ hang)
-    if [ "$name" = "sim7600-4g" ]; then
-        if ! ls /dev/ttyUSB* &>/dev/null 2>&1; then
-            warn "Skipping $name — no 4G modem hardware detected"
+    # Skip oneshot services — they run on boot or via timers, not via restart
+    case "$name" in
+        sim7600-4g)
+            log "Skipping $name (oneshot — runs on boot only)"
             return 0
-        fi
-    fi
-    # Skip oneshot services that are meant to be triggered by timers
-    if [ "$name" = "cleanup-detections" ]; then
-        log "Skipping $name (oneshot — managed by cleanup-detections.timer)"
-        return 0
-    fi
+            ;;
+        cleanup-detections)
+            log "Skipping $name (oneshot — managed by cleanup-detections.timer)"
+            return 0
+            ;;
+    esac
     if [ "$name" = "audio-autostart" ]; then
         # User-level service
         log "Restarting $name (user service for $ACTUAL_USER)..."
