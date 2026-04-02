@@ -35,12 +35,12 @@ logger = logging.getLogger(__name__)
 def check_internet_connection() -> bool:
     """
     Kiểm tra xem hệ thống có kết nối internet hay không.
-    
+
     Phương pháp: Thử kết nối TCP đến Google DNS (8.8.8.8:53)
-    
+
     Returns:
         bool: True nếu có internet, False nếu không
-        
+
     Example:
         >>> if check_internet_connection():
         ...     print("Đã có internet!")
@@ -51,11 +51,11 @@ def check_internet_connection() -> bool:
         # Tạo socket TCP
         socket_obj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         socket_obj.settimeout(INTERNET_CHECK_TIMEOUT)
-        
+
         # Thử kết nối đến Google DNS
         result = socket_obj.connect_ex((INTERNET_CHECK_HOST, INTERNET_CHECK_PORT))
         socket_obj.close()
-        
+
         # Nếu result = 0 nghĩa là kết nối thành công
         if result == 0:
             logger.info("✓ Đã có kết nối internet")
@@ -63,9 +63,44 @@ def check_internet_connection() -> bool:
         else:
             logger.info("✗ Không có kết nối internet")
             return False
-            
+
     except socket.error as e:
         logger.warning(f"Lỗi khi kiểm tra internet: {e}")
+        return False
+
+
+def check_internet_via_interface(iface: str) -> bool:
+    """
+    Kiểm tra internet qua đúng interface chỉ định, bỏ qua routing table.
+
+    Dùng SO_BINDTODEVICE để buộc kernel gửi packet qua interface đó,
+    tránh trường hợp OS dùng interface khác (WiFi/LAN) khi check.
+
+    Yêu cầu: process cần chạy với quyền root (CAP_NET_RAW).
+
+    Args:
+        iface: Tên interface cần kiểm tra, ví dụ "eth0", "wwan0", "wlan0"
+
+    Returns:
+        bool: True nếu interface đó có internet thực sự
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+        sock.settimeout(INTERNET_CHECK_TIMEOUT)
+        result = sock.connect_ex((INTERNET_CHECK_HOST, INTERNET_CHECK_PORT))
+        sock.close()
+        if result == 0:
+            logger.info(f"✓ Interface {iface} có kết nối internet")
+            return True
+        else:
+            logger.info(f"✗ Interface {iface} không có kết nối internet (errno={result})")
+            return False
+    except PermissionError:
+        logger.error(f"SO_BINDTODEVICE yêu cầu quyền root, không thể kiểm tra interface {iface}")
+        return False
+    except OSError as e:
+        logger.warning(f"Lỗi khi kiểm tra internet qua {iface}: {e}")
         return False
 
 
@@ -312,7 +347,7 @@ def _setup_lan(timeout: int) -> Tuple[bool, str]:
     # Chờ DHCP ổn định
     time.sleep(2)
 
-    if check_internet_connection():
+    if check_internet_via_interface(iface):
         logger.info(f"LAN kết nối thành công qua {iface}")
         return True, f"LAN đã kết nối qua {iface}"
 
@@ -359,7 +394,7 @@ def _setup_lte(timeout: int) -> Tuple[bool, str]:
 
     logger.info(f"LTE interface xuất hiện: {iface_found}")
 
-    if check_internet_connection():
+    if check_internet_via_interface(iface_found):
         logger.info("LTE kết nối thành công, có internet")
         return True, f"LTE đã kết nối qua {iface_found}"
 
