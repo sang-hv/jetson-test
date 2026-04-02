@@ -1,8 +1,8 @@
 [Unit]
 Description=Audio Backchannel Server for go2rtc
 After=network.target sound.target pulseaudio.service
-# No BindsTo=camera-stream needed. Backchannel only needs echocancel_sink (PulseAudio).
-# camera-stream restart recreates echo cancel in its ExecStartPre; if backchannel's pacat
+# Backchannel only needs echocancel_sink (PulseAudio), independent of go2rtc/stream pipeline.
+# go2rtc restart recreates echo cancel in its ExecStartPre; if backchannel's pacat
 # loses the old sink → BrokenPipeError → Restart=always → ExecStartPre checks/creates echo cancel.
 # Disable rate-limiting so systemd never stops restarting after repeated failures.
 StartLimitIntervalSec=0
@@ -13,7 +13,7 @@ User=__USER__
 Group=audio
 WorkingDirectory=/opt/backchannel
 # Safety net: only create echo cancel if missing. Do NOT run full setup-audio-autostart.sh
-# here — it unloads+reloads the module, which would break camera-stream's active pulsesrc connection.
+# here — it unloads+reloads the module, which would break go2rtc's active pulsesrc connection.
 ExecStartPre=/bin/bash -c '\
   U=$(id -u __USER__); \
   export XDG_RUNTIME_DIR=/run/user/$U \

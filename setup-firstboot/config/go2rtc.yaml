@@ -1,11 +1,12 @@
 streams:
-  # camera-stream.service → tcpserversink :8553 → tcpclientsrc here
+  # go2rtc spawns start-stream.py directly, reads MPEG-TS from stdout.
+  # Avoids TCP intermediary (fixes go2rtc panic on MPEG-TS SPS/PPS parse).
   camera:
-    - tcp://localhost:8553
+    - exec:python3 /opt/stream/start-stream.py --mode exec
 
 api:
   listen: ":1984"
-  origin: "*" 
+  origin: "*"
 
 log:
   level: info
