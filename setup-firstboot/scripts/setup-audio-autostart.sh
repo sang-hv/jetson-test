@@ -121,7 +121,7 @@ if [ "$load_success" = false ]; then
 else
     log "Echo cancel ready: echocancel_source / echocancel_sink"
     # Set initial volumes. These may be overridden by module-stream-restore when
-    # a client (pulsesrc) connects; go2rtc ExecStartPost re-applies after connect.
+    # a client (pulsesrc) connects; camera-stream ExecStartPost re-applies after connect.
     pactl set-source-volume "$MIC_SOURCE" 100% 2>/dev/null || true
     pactl set-source-volume echocancel_source 100% 2>/dev/null || true
     pactl set-sink-volume echocancel_sink 80% 2>/dev/null || true

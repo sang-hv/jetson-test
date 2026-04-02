@@ -1,8 +1,9 @@
 streams:
-  # go2rtc spawns start-stream.py directly, reads MPEG-TS from stdout.
-  # Avoids TCP intermediary (fixes go2rtc panic on MPEG-TS SPS/PPS parse).
+  # camera-stream.service → tcpserversink :8553
+  # Use exec:bash wrapper instead of tcp:// to avoid go2rtc 1.9.14 panic
+  # on MPEG-TS SPS/PPS parse. bash cat reads from byte 0 → SPS/PPS always present.
   camera:
-    - exec:python3 /opt/stream/start-stream.py --mode exec
+    - exec:bash -c "cat < /dev/tcp/localhost/8553"
 
 api:
   listen: ":1984"

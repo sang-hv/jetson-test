@@ -120,18 +120,13 @@ cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
 chmod +x /opt/stream/start-stream.py
 
-# go2rtc now spawns start-stream.py directly via exec mode (no separate camera-stream service)
-# Disable legacy camera-stream if it exists from a previous install
-if systemctl is-enabled camera-stream.service >/dev/null 2>&1; then
-    systemctl disable --now camera-stream.service 2>/dev/null || true
-    log "Disabled legacy camera-stream.service (merged into go2rtc)"
-fi
-
+sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/camera-stream.service" \
+    > /etc/systemd/system/camera-stream.service
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/go2rtc.service" \
     > /etc/systemd/system/go2rtc.service
 systemctl daemon-reload
-systemctl enable go2rtc.service
-log "go2rtc configured (exec: start-stream.py)"
+systemctl enable camera-stream.service go2rtc.service
+log "camera-stream + go2rtc configured"
 
 step "Phase 2/7: device identity and sync scripts"
 DEVICE_ID="${DEVICE_ID:-}"
