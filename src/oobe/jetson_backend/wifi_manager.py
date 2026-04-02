@@ -306,6 +306,69 @@ def get_ethernet_interface() -> Optional[str]:
     return None
 
 
+def _set_routing_priority(iface: str) -> bool:
+    """
+    Đảm bảo interface chỉ định là default route duy nhất.
+    Các interface khác được hạ metric lên 200 (vẫn connected, chỉ hạ ưu tiên).
+    Yêu cầu quyền root.
+    """
+    try:
+        proc = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+            capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode != 0:
+            logger.warning("Không lấy được danh sách active connections")
+            return False
+
+        active = {}  # {device: conn_name}
+        for line in proc.stdout.strip().split('\n'):
+            parts = line.split(':')
+            if len(parts) >= 2 and parts[1]:
+                active[parts[1]] = parts[0]
+
+        if iface not in active:
+            logger.warning(f"Không tìm thấy active connection cho {iface}")
+            return False
+
+        # Bước 1: raise metric các interface khác lên 200
+        for dev, conn in active.items():
+            if dev == iface:
+                continue
+            try:
+                subprocess.run(
+                    ["nmcli", "connection", "modify", conn, "ipv4.route-metric", "200"],
+                    capture_output=True, text=True, timeout=5, check=True
+                )
+                subprocess.run(
+                    ["nmcli", "device", "reapply", dev],
+                    capture_output=True, text=True, timeout=5, check=True
+                )
+                logger.info(f"Hạ ưu tiên {dev} (connection: {conn}) → metric=200")
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Không thể set metric cho {dev}: {e.stderr.strip()}")
+
+        # Bước 2: set interface mục tiêu xuống 10
+        conn_name = active[iface]
+        subprocess.run(
+            ["nmcli", "connection", "modify", conn_name, "ipv4.route-metric", "10"],
+            capture_output=True, text=True, timeout=5, check=True
+        )
+        subprocess.run(
+            ["nmcli", "device", "reapply", iface],
+            capture_output=True, text=True, timeout=5, check=True
+        )
+        logger.info(f"Đặt ưu tiên cao nhất cho {iface} (connection: {conn_name}) → metric=10")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Lỗi khi set routing priority cho {iface}: {e.stderr.strip()}")
+        return False
+    except Exception as e:
+        logger.error(f"Lỗi không xác định khi set routing priority: {e}")
+        return False
+
+
 def setup_network_connection(net_type: str) -> Tuple[bool, str]:
     """
     Kết nối device vào mạng LAN (Ethernet) hoặc LTE (cellular modem).
@@ -346,6 +409,7 @@ def _setup_lan(timeout: int) -> Tuple[bool, str]:
 
     # Chờ DHCP ổn định
     time.sleep(2)
+    _set_routing_priority(iface)
 
     if check_internet_via_interface(iface):
         logger.info(f"LAN kết nối thành công qua {iface}")
@@ -393,6 +457,7 @@ def _setup_lte(timeout: int) -> Tuple[bool, str]:
         return False, f"Không tìm thấy LTE interface sau {timeout}s"
 
     logger.info(f"LTE interface xuất hiện: {iface_found}")
+    _set_routing_priority(iface_found)
 
     if check_internet_via_interface(iface_found):
         logger.info("LTE kết nối thành công, có internet")
