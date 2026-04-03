@@ -887,7 +887,7 @@ class WiFiSetupHandler:
         
         Chạy trong thread riêng để không block BLE.
         """
-        if self.ssid and self.password:
+        if self.ssid and self.password is not None:
             # Tránh chạy nhiều thread cùng lúc
             if self._connect_thread and self._connect_thread.is_alive():
                 logger.warning("Đang có kết nối WiFi đang chạy, bỏ qua yêu cầu mới")
@@ -902,45 +902,58 @@ class WiFiSetupHandler:
     def _perform_connection(self):
         """
         Thực hiện kết nối WiFi.
-        
+
         Được chạy trong thread riêng.
         """
         logger.info(f"Bắt đầu kết nối WiFi: {self.ssid}")
-        
-        # Cập nhật trạng thái: Đang kết nối
-        if self.status_chrc:
-            GLib.idle_add(
-                lambda: self.status_chrc.set_status(WiFiStatus.CONNECTING)
-            )
-        
-        # Thực hiện kết nối
-        success, message = connect_wifi(self.ssid, self.password)
-        
-        # Cập nhật trạng thái dựa trên kết quả
-        if success:
-            logger.info(f"Kết nối thành công: {message}")
+        try:
+            # Cập nhật trạng thái: Đang kết nối
             if self.status_chrc:
                 GLib.idle_add(
-                    lambda: self.status_chrc.set_status(WiFiStatus.SUCCESS)
+                    lambda: self.status_chrc.set_status(WiFiStatus.CONNECTING)
                 )
-            
-            # Đợi một chút rồi thoát
-            time.sleep(3)
-            logger.info("Kết nối WiFi thành công, đang thoát BLE setup...")
-            if self.mainloop:
-                GLib.idle_add(self.mainloop.quit)
-        else:
-            logger.error(f"Kết nối thất bại: {message}")
+
+            # Thực hiện kết nối
+            success, message = connect_wifi(self.ssid, self.password)
+
+            # Cập nhật trạng thái dựa trên kết quả
+            if success:
+                logger.info(f"Kết nối thành công: {message}")
+                if self.status_chrc:
+                    GLib.idle_add(
+                        lambda: self.status_chrc.set_status(WiFiStatus.SUCCESS)
+                    )
+
+                # Đợi một chút rồi thoát
+                time.sleep(3)
+                logger.info("Kết nối WiFi thành công, đang thoát BLE setup...")
+                if self.mainloop:
+                    GLib.idle_add(self.mainloop.quit)
+            else:
+                logger.error(f"Kết nối thất bại: {message}")
+                if self.status_chrc:
+                    GLib.idle_add(
+                        lambda: self.status_chrc.set_status(WiFiStatus.ERROR)
+                    )
+
+                # Reset để người dùng có thể thử lại
+                self.ssid = None
+                self.password = None
+
+                # Sau 5 giây, reset về trạng thái chờ
+                time.sleep(5)
+                if self.status_chrc:
+                    GLib.idle_add(
+                        lambda: self.status_chrc.set_status(WiFiStatus.WAITING)
+                    )
+        except Exception as e:
+            logger.error(f"Lỗi không xác định khi kết nối WiFi: {e}")
             if self.status_chrc:
                 GLib.idle_add(
                     lambda: self.status_chrc.set_status(WiFiStatus.ERROR)
                 )
-            
-            # Reset để người dùng có thể thử lại
             self.ssid = None
             self.password = None
-            
-            # Sau 5 giây, reset về trạng thái chờ
             time.sleep(5)
             if self.status_chrc:
                 GLib.idle_add(

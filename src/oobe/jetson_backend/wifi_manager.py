@@ -514,11 +514,17 @@ def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
             # device wifi connect: Lệnh kết nối WiFi
             # password: Mật khẩu
             # ifname: Interface (wlan0)
-            connect_cmd = [
-                "nmcli", "device", "wifi", "connect", ssid,
-                "password", password,
-                "ifname", interface
-            ]
+            if password:
+                connect_cmd = [
+                    "nmcli", "device", "wifi", "connect", ssid,
+                    "password", password,
+                    "ifname", interface
+                ]
+            else:
+                connect_cmd = [
+                    "nmcli", "device", "wifi", "connect", ssid,
+                    "ifname", interface
+                ]
             
             result = subprocess.run(
                 connect_cmd,
