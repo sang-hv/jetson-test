@@ -241,7 +241,15 @@ def scan_wifi_networks() -> List[dict]:
                             'security': parts[2] if parts[2] else 'Open'
                         })
             
-            logger.info(f"Tìm thấy {len(networks)} mạng WiFi")
+            # Deduplicate: giữ SSID có signal cao nhất
+            seen = {}
+            for net in networks:
+                ssid = net['ssid']
+                if ssid not in seen or net['signal'] > seen[ssid]['signal']:
+                    seen[ssid] = net
+            networks = list(seen.values())
+
+            logger.info(f"Tìm thấy {len(networks)} mạng WiFi (sau dedup)")
         else:
             logger.error(f"Lỗi khi quét WiFi: {result.stderr}")
             

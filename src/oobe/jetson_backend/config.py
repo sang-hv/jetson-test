@@ -119,7 +119,7 @@ class ConnectionType:
 
 
 # Cấu hình WiFi Scan
-WIFI_SCAN_MAX_NETWORKS = 4  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
+WIFI_SCAN_MAX_NETWORKS = 10  # Số mạng tối đa trả về (giới hạn kích thước BLE packet)
 
 # =============================================================================
 # CẤU HÌNH GPIO

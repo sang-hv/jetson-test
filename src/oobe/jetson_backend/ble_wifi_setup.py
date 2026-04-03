@@ -547,25 +547,25 @@ if DBUS_AVAILABLE:
         
         def _set_initial_value(self):
             """Set giá trị khởi tạo."""
-            initial_data = {
-                "status": WiFiScanStatus.IDLE,
-                "networks": []
-            }
-            self.value = list(json.dumps(initial_data).encode('utf-8'))
+            initial_data = {"s": WiFiScanStatus.IDLE, "n": []}
+            self.value = list(json.dumps(initial_data, separators=(',', ':')).encode('utf-8'))
 
         def set_scan_status(self, status: int, networks: List[dict] = None):
             """
             Cập nhật trạng thái scan và danh sách mạng WiFi.
-            
+
             Args:
                 status: Một trong các giá trị WiFiScanStatus
                 networks: Danh sách mạng WiFi (optional)
+
+            Format gửi đi (compact):
+                {"s": <status>, "n": [[ssid, signal, security], ...]}
             """
             data = {
-                "status": status,
-                "networks": networks or []
+                "s": status,
+                "n": [[net["ssid"], net["signal"], net["security"]] for net in (networks or [])]
             }
-            json_str = json.dumps(data, ensure_ascii=False)
+            json_str = json.dumps(data, separators=(',', ':'), ensure_ascii=False)
             logger.info(f"Cập nhật WiFi list: status={status}, networks={len(networks or [])}")
             
             self.value = list(json_str.encode('utf-8'))
