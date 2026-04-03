@@ -60,7 +60,8 @@ log "Base software packages installed"
 
 # Remove unnecessary services that waste CPU/RAM on edge devices
 apt-get remove -y -qq tracker-miner-fs apport 2>&1 | tail -3 | tee -a "$LOG_FILE" || true
-apt-get autoremove -y -qq 2>&1 | tail -1 | tee -a "$LOG_FILE" || true
+# NOTE: apt autoremove is deferred to AFTER nvidia packages are held (Phase 5.5)
+# Running it here would remove nvidia-l4t-* packages before they are protected.
 log "Removed tracker-miner-fs (file indexer) and apport (crash reporter)"
 
 step "Phase 2/8: Storage and directories"
@@ -147,7 +148,17 @@ HOLD_PACKAGES=(
     libnvonnxparsers10 libnvonnxparsers-dev
     python3-libnvinfer python3-libnvinfer-dev
     python3-libnvinfer-dispatch python3-libnvinfer-lean
+    # L4T packages — apt autoremove will remove these and kill the camera pipeline
     nvidia-l4t-multimedia
+    nvidia-l4t-gstreamer
+    nvidia-l4t-camera
+    nvidia-l4t-core
+    nvidia-l4t-cuda
+    nvidia-l4t-nvsci
+    nvidia-l4t-multimedia-utils
+    nvidia-l4t-init
+    nvidia-l4t-3d-core
+    nvidia-l4t-firmware
 )
 
 apt-get install -y -qq --allow-downgrades "${TRT_PACKAGES[@]}" nvidia-l4t-multimedia \
@@ -156,6 +167,12 @@ log "TensorRT ${TRT_VERSION} installed"
 
 apt-mark hold "${HOLD_PACKAGES[@]}" 2>&1 | tee -a "$LOG_FILE"
 log "TensorRT + NVIDIA packages held (use 'apt-mark unhold' to release)"
+
+# WARNING: Do NOT run apt autoremove on Jetson.
+# apt-mark hold only protects held packages, NOT their dependencies.
+# autoremove will remove libprotobuf-lite23, libavutil56, libswresample3, etc.
+# which are indirect deps of nvargus-daemon and gstreamer1.0-libav.
+# This kills the camera pipeline (Argus socket crash + black stream).
 
 step "Phase 6/8: GStreamer validation"
 for pkg_name in libopenal-data libzvbi-common; do
