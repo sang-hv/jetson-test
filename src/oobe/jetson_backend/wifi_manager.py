@@ -11,6 +11,7 @@ Module này cung cấp các hàm để:
 Tác giả: Jetson AI Kit Team
 """
 
+import os
 import re
 import subprocess
 import socket
@@ -31,6 +32,14 @@ from config import (
 
 # Thiết lập logger
 logger = logging.getLogger(__name__)
+
+# --- Network watchdog integration (mirror switch-network.py) ---
+NETWORK_CONF = "/etc/device/network.conf"
+
+_IFACE_RE = {
+    "lan":  r"^(eth|enp|enP|eno|enx|end)",
+    "4g":   r"^(usb|wwan|wwp)",
+}
 
 
 def check_internet_connection() -> bool:
@@ -388,67 +397,82 @@ def get_ethernet_interface() -> Optional[str]:
     return None
 
 
-def _set_routing_priority(iface: str) -> bool:
-    """
-    Đảm bảo interface chỉ định là default route duy nhất.
-    Các interface khác được hạ metric lên 200 (vẫn connected, chỉ hạ ưu tiên).
-    Yêu cầu quyền root.
-    """
+# =============================================================================
+# NETWORK WATCHDOG HELPERS (mirror switch-network.py)
+# =============================================================================
+
+def _update_network_conf(mode: str):
+    """Ghi NETWORK_MODE=<mode> vào /etc/device/network.conf."""
     try:
-        proc = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+        os.makedirs(os.path.dirname(NETWORK_CONF), exist_ok=True)
+        try:
+            text = open(NETWORK_CONF).read()
+            if re.search(r"^NETWORK_MODE=", text, re.M):
+                text = re.sub(r"^NETWORK_MODE=.*", f"NETWORK_MODE={mode}", text, flags=re.M)
+            else:
+                text += f"\nNETWORK_MODE={mode}\n"
+        except FileNotFoundError:
+            text = f"NETWORK_MODE={mode}\n"
+        open(NETWORK_CONF, "w").write(text)
+        logger.info(f"Đã ghi NETWORK_MODE={mode} vào {NETWORK_CONF}")
+    except Exception as e:
+        logger.error(f"Không thể ghi {NETWORK_CONF}: {e}")
+
+
+def _reload_watchdog() -> bool:
+    """Reload hoặc start network-watchdog service."""
+    try:
+        active = subprocess.run(
+            ["systemctl", "is-active", "network-watchdog"],
             capture_output=True, text=True, timeout=5
-        )
-        if proc.returncode != 0:
-            logger.warning("Không lấy được danh sách active connections")
-            return False
+        ).stdout.strip()
 
-        active = {}  # {device: conn_name}
-        for line in proc.stdout.strip().split('\n'):
-            parts = line.split(':')
-            if len(parts) >= 2 and parts[1]:
-                active[parts[1]] = parts[0]
+        if active == "active":
+            subprocess.run(["systemctl", "reload", "network-watchdog"],
+                           capture_output=True, text=True, timeout=5)
+            logger.info("Đã reload network-watchdog")
+            return True
 
-        if iface not in active:
-            logger.warning(f"Không tìm thấy active connection cho {iface}")
-            return False
+        subprocess.run(["systemctl", "start", "network-watchdog"],
+                       capture_output=True, text=True, timeout=10)
+        for _ in range(20):
+            st = subprocess.run(
+                ["systemctl", "is-active", "network-watchdog"],
+                capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+            if st == "active":
+                subprocess.run(["systemctl", "reload", "network-watchdog"],
+                               capture_output=True, text=True, timeout=5)
+                logger.info("Đã start + reload network-watchdog")
+                return True
+            time.sleep(0.3)
 
-        # Bước 1: raise metric các interface khác lên 200
-        for dev, conn in active.items():
-            if dev == iface:
-                continue
-            try:
-                subprocess.run(
-                    ["nmcli", "connection", "modify", conn, "ipv4.route-metric", "200"],
-                    capture_output=True, text=True, timeout=5, check=True
-                )
-                subprocess.run(
-                    ["nmcli", "device", "reapply", dev],
-                    capture_output=True, text=True, timeout=5, check=True
-                )
-                logger.info(f"Hạ ưu tiên {dev} (connection: {conn}) → metric=200")
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Không thể set metric cho {dev}: {e.stderr.strip()}")
-
-        # Bước 2: set interface mục tiêu xuống 10
-        conn_name = active[iface]
-        subprocess.run(
-            ["nmcli", "connection", "modify", conn_name, "ipv4.route-metric", "10"],
-            capture_output=True, text=True, timeout=5, check=True
-        )
-        subprocess.run(
-            ["nmcli", "device", "reapply", iface],
-            capture_output=True, text=True, timeout=5, check=True
-        )
-        logger.info(f"Đặt ưu tiên cao nhất cho {iface} (connection: {conn_name}) → metric=10")
-        return True
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Lỗi khi set routing priority cho {iface}: {e.stderr.strip()}")
+        logger.error("Không thể start network-watchdog")
         return False
     except Exception as e:
-        logger.error(f"Lỗi không xác định khi set routing priority: {e}")
+        logger.error(f"Lỗi khi reload watchdog: {e}")
         return False
+
+
+def _route_dev() -> str:
+    """Lấy device hiện tại từ default route (ip route get 8.8.8.8)."""
+    try:
+        out = subprocess.run(
+            ["ip", "route", "get", INTERNET_CHECK_HOST],
+            capture_output=True, text=True, timeout=5
+        ).stdout
+        m = re.search(r"dev (\S+)", out)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def _matches_mode(dev: str, mode: str) -> bool:
+    """Kiểm tra device name có match với pattern của mode không."""
+    if not dev:
+        return False
+    pat = _IFACE_RE.get(mode)
+    return bool(pat and re.match(pat, dev))
 
 
 def setup_network_connection(net_type: str) -> Tuple[bool, str]:
@@ -469,83 +493,63 @@ def setup_network_connection(net_type: str) -> Tuple[bool, str]:
         return False, f"Loại mạng không hợp lệ: {net_type}"
 
 
+def _setup_network_via_watchdog(
+    mode: str, timeout: int, allow_no_internet: bool = False
+) -> Tuple[bool, str]:
+    """
+    Setup mạng bằng cách ghi config và delegate cho network-watchdog.
+    Logic mirror từ switch-network.py.
+
+    Args:
+        mode: "lan" hoặc "4g" (tên mode trong network.conf)
+        timeout: Thời gian chờ tối đa (giây)
+        allow_no_internet: True = LAN nội bộ không có internet vẫn OK
+    """
+    label = "LTE" if mode == "4g" else "LAN"
+    before = _route_dev()
+    logger.info(f"[{label}] Bắt đầu setup, mode={mode}, current dev={before}")
+
+    _update_network_conf(mode)
+
+    if not _reload_watchdog():
+        return False, "Không thể start network-watchdog service"
+
+    # Nếu đã đúng interface → skip poll
+    if not _matches_mode(before, mode):
+        for waited in range(0, timeout, 2):
+            time.sleep(2)
+            after = _route_dev()
+            if _matches_mode(after, mode):
+                logger.info(f"[{label}] Route chuyển sang {after} sau {waited + 2}s")
+                break
+
+    after = _route_dev()
+
+    if _matches_mode(after, mode):
+        has_internet = check_internet_via_interface(after)
+        if has_internet:
+            logger.info(f"[{label}] Kết nối thành công qua {after}")
+            return True, f"{label} đã kết nối qua {after}"
+        if allow_no_internet:
+            logger.warning(f"[{label}] {after} đã kết nối nhưng không có internet")
+            return True, f"{label} đã kết nối qua {after} (không có internet)"
+        return False, f"{label} interface {after} đã lên nhưng không có internet"
+
+    if mode == "4g":
+        logger.warning(f"[LTE] Chưa có interface sau {timeout}s, mode đã lưu cho watchdog")
+        return False, f"LTE chưa sẵn sàng sau {timeout}s, mode đã lưu cho watchdog"
+
+    return False, f"{label} interface không tìm thấy sau {timeout}s"
+
+
 def _setup_lan(timeout: int) -> Tuple[bool, str]:
-    """Kết nối LAN qua Ethernet interface."""
-    iface = get_ethernet_interface()
-    if not iface:
-        return False, "Không tìm thấy Ethernet interface"
-
-    logger.info(f"Kết nối LAN qua interface: {iface}")
-    try:
-        result = subprocess.run(
-            ["nmcli", "device", "connect", iface],
-            capture_output=True, text=True, timeout=timeout
-        )
-        if result.returncode != 0:
-            logger.error(f"nmcli device connect thất bại: {result.stderr.strip()}")
-            return False, f"Kết nối LAN thất bại: {result.stderr.strip()}"
-    except subprocess.TimeoutExpired:
-        return False, f"LAN connect timeout sau {timeout}s"
-    except Exception as e:
-        return False, f"Lỗi kết nối LAN: {e}"
-
-    # Chờ DHCP ổn định
-    time.sleep(2)
-    _set_routing_priority(iface)
-
-    if check_internet_via_interface(iface):
-        logger.info(f"LAN kết nối thành công qua {iface}")
-        return True, f"LAN đã kết nối qua {iface}"
-
-    # Có thể là LAN nội bộ (không có internet) — vẫn coi là thành công
-    logger.warning(f"LAN interface {iface} đã kết nối nhưng không có internet")
-    return True, f"LAN đã kết nối qua {iface} (không có internet)"
+    """Kết nối LAN qua network-watchdog."""
+    return _setup_network_via_watchdog("lan", timeout, allow_no_internet=True)
 
 
 def _setup_lte(timeout: int) -> Tuple[bool, str]:
-    """Kết nối LTE qua SIM7600 modem."""
-    logger.info("Khởi động LTE modem via sim7600-4g.service")
-    try:
-        subprocess.run(
-            ["systemctl", "restart", "sim7600-4g.service"],
-            capture_output=True, text=True, timeout=15
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("systemctl restart timeout, tiếp tục poll interface...")
-    except Exception as e:
-        logger.warning(f"systemctl restart lỗi: {e}, tiếp tục poll interface...")
-
-    # Poll chờ modem interface xuất hiện
-    deadline = time.time() + timeout
-    iface_found = None
-    while time.time() < deadline:
-        try:
-            cmd = ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            for line in proc.stdout.strip().split('\n'):
-                parts = line.split(':')
-                if len(parts) >= 2:
-                    dev, dev_type = parts[0], parts[1]
-                    if dev_type == "gsm" or dev.startswith("usb") or dev.startswith("wwan"):
-                        iface_found = dev
-                        break
-            if iface_found:
-                break
-        except Exception:
-            pass
-        time.sleep(2)
-
-    if not iface_found:
-        return False, f"Không tìm thấy LTE interface sau {timeout}s"
-
-    logger.info(f"LTE interface xuất hiện: {iface_found}")
-    _set_routing_priority(iface_found)
-
-    if check_internet_via_interface(iface_found):
-        logger.info("LTE kết nối thành công, có internet")
-        return True, f"LTE đã kết nối qua {iface_found}"
-
-    return False, f"LTE interface {iface_found} đã lên nhưng không có internet"
+    """Kết nối LTE qua network-watchdog."""
+    return _setup_network_via_watchdog("4g", timeout, allow_no_internet=False)
 
 
 def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
