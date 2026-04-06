@@ -11,6 +11,7 @@ Module này cung cấp các hàm để:
 Tác giả: Jetson AI Kit Team
 """
 
+import re
 import subprocess
 import socket
 import time
@@ -113,6 +114,51 @@ _NET_TYPE_TO_NMCLI = {
 _CELLULAR_DEVICE_PREFIXES = ("usb", "wwan")
 
 
+def _detect_cellular_via_ip() -> list:
+    """
+    Fallback: dùng 'ip' command để tìm interface cellular (usb*, wwan*)
+    có IPv4 address — dành cho trường hợp nmcli không quản lý device này.
+
+    Returns:
+        list: Danh sách dict tương thích format active_connections
+    """
+    results = []
+    try:
+        lines = subprocess.run(
+            ["ip", "-o", "link", "show"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip().split('\n')
+
+        for line in lines:
+            m = re.match(r'^\d+:\s+(\S+?)[@:]', line)
+            if not m:
+                continue
+            dev = m.group(1)
+            if not any(dev.startswith(p) for p in _CELLULAR_DEVICE_PREFIXES):
+                continue
+
+            # Kiểm tra interface có IPv4 address không
+            addr_out = subprocess.run(
+                ["ip", "-4", "addr", "show", dev],
+                capture_output=True, text=True, timeout=5
+            ).stdout
+            if not re.search(r'inet\s+\S+', addr_out):
+                continue
+
+            results.append({
+                "device": dev,
+                "type": "cellular",
+                "connection": f"LTE ({dev})"
+            })
+
+    except Exception as e:
+        logger.warning(f"Fallback detect cellular via ip failed: {e}")
+
+    if results:
+        logger.info(f"Phát hiện cellular qua ip command: {[r['device'] for r in results]}")
+    return results
+
+
 def get_network_status(net_type: str = None) -> dict:
     """
     Kiểm tra trạng thái kết nối mạng hiện tại của hệ thống.
@@ -166,6 +212,10 @@ def get_network_status(net_type: str = None) -> dict:
                     if c["type"] == "gsm"
                     or any(c["device"].startswith(p) for p in _CELLULAR_DEVICE_PREFIXES)
                 ]
+                # Fallback: nmcli có thể không quản lý USB RNDIS,
+                # dùng ip command để tìm interface cellular có IP
+                if not active_connections:
+                    active_connections = _detect_cellular_via_ip()
             else:
                 nmcli_type = _NET_TYPE_TO_NMCLI.get(net_type)
                 if nmcli_type:
