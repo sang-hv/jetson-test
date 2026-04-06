@@ -107,8 +107,10 @@ def check_internet_via_interface(iface: str) -> bool:
 _NET_TYPE_TO_NMCLI = {
     "wifi": "wifi",
     "ethernet": "ethernet",
-    "cellular": "gsm",
 }
+
+# Pattern nhận diện LTE/cellular interface qua USB RNDIS hoặc WWAN
+_CELLULAR_DEVICE_PREFIXES = ("usb", "wwan")
 
 
 def get_network_status(net_type: str = None) -> dict:
@@ -157,9 +159,17 @@ def get_network_status(net_type: str = None) -> dict:
 
         # Lọc theo loại mạng yêu cầu nếu có
         if net_type:
-            nmcli_type = _NET_TYPE_TO_NMCLI.get(net_type)
-            if nmcli_type:
-                active_connections = [c for c in active_connections if c["type"] == nmcli_type]
+            if net_type == "cellular":
+                # LTE/cellular: lọc theo device name (usb*, wwan*) hoặc nmcli type gsm
+                active_connections = [
+                    c for c in active_connections
+                    if c["type"] == "gsm"
+                    or any(c["device"].startswith(p) for p in _CELLULAR_DEVICE_PREFIXES)
+                ]
+            else:
+                nmcli_type = _NET_TYPE_TO_NMCLI.get(net_type)
+                if nmcli_type:
+                    active_connections = [c for c in active_connections if c["type"] == nmcli_type]
 
         if not active_connections:
             logger.info(f"Không có kết nối {net_type or 'mạng'} nào đang active")
@@ -175,12 +185,18 @@ def get_network_status(net_type: str = None) -> dict:
         )
 
         primary = active_connections[0]
-        result["type"] = type_map.get(primary["type"], primary["type"])
+        conn_type = type_map.get(primary["type"], primary["type"])
+
+        # Nếu device là USB/WWAN thì đánh dấu là cellular
+        if any(primary["device"].startswith(p) for p in _CELLULAR_DEVICE_PREFIXES):
+            conn_type = "cellular"
+
+        result["type"] = conn_type
         result["interface"] = primary["device"]
         result["details"] = primary["connection"]
 
-        # Kiểm tra internet thực tế
-        result["connected"] = check_internet_connection()
+        # Kiểm tra internet qua đúng interface
+        result["connected"] = check_internet_via_interface(primary["device"])
 
         logger.info(f"Network status: type={result['type']}, "
                      f"interface={result['interface']}, "
