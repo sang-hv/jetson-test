@@ -537,7 +537,7 @@ def _setup_lan(timeout: int) -> Tuple[bool, str]:
 
 def _setup_lte(timeout: int) -> Tuple[bool, str]:
     """Kết nối LTE qua network-watchdog."""
-    return _setup_network_via_watchdog("4g", timeout, allow_no_internet=False)
+    return _setup_network_via_watchdog("4g", timeout)
 
 
 def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
