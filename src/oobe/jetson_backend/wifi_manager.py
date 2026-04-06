@@ -122,7 +122,7 @@ def _detect_cellular_via_ip() -> list:
     Returns:
         list: Danh sách dict tương thích format active_connections
     """
-    results = []
+    candidates = []
     try:
         lines = subprocess.run(
             ["ip", "-o", "link", "show"],
@@ -142,10 +142,18 @@ def _detect_cellular_via_ip() -> list:
                 ["ip", "-4", "addr", "show", dev],
                 capture_output=True, text=True, timeout=5
             ).stdout
-            if not re.search(r'inet\s+\S+', addr_out):
+            ip_match = re.search(r'inet\s+(\S+)', addr_out)
+            if not ip_match:
                 continue
 
-            results.append({
+            ip_addr = ip_match.group(1).split('/')[0]
+
+            # Bỏ qua link-local address (169.254.x.x) — không có kết nối thật
+            if ip_addr.startswith("169.254."):
+                logger.debug(f"Bỏ qua {dev}: link-local IP {ip_addr}")
+                continue
+
+            candidates.append({
                 "device": dev,
                 "type": "cellular",
                 "connection": f"LTE ({dev})"
@@ -154,9 +162,9 @@ def _detect_cellular_via_ip() -> list:
     except Exception as e:
         logger.warning(f"Fallback detect cellular via ip failed: {e}")
 
-    if results:
-        logger.info(f"Phát hiện cellular qua ip command: {[r['device'] for r in results]}")
-    return results
+    if candidates:
+        logger.info(f"Phát hiện cellular qua ip command: {[c['device'] for c in candidates]}")
+    return candidates
 
 
 def get_network_status(net_type: str = None) -> dict:
