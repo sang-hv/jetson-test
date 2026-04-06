@@ -493,9 +493,7 @@ def setup_network_connection(net_type: str) -> Tuple[bool, str]:
         return False, f"Loại mạng không hợp lệ: {net_type}"
 
 
-def _setup_network_via_watchdog(
-    mode: str, timeout: int, allow_no_internet: bool = False
-) -> Tuple[bool, str]:
+def _setup_network_via_watchdog(mode: str, timeout: int) -> Tuple[bool, str]:
     """
     Setup mạng bằng cách ghi config và delegate cho network-watchdog.
     Logic mirror từ switch-network.py.
@@ -503,7 +501,6 @@ def _setup_network_via_watchdog(
     Args:
         mode: "lan" hoặc "4g" (tên mode trong network.conf)
         timeout: Thời gian chờ tối đa (giây)
-        allow_no_internet: True = LAN nội bộ không có internet vẫn OK
     """
     label = "LTE" if mode == "4g" else "LAN"
     before = _route_dev()
@@ -514,29 +511,20 @@ def _setup_network_via_watchdog(
     if not _reload_watchdog():
         return False, "Không thể start network-watchdog service"
 
-    # Nếu đã đúng interface → skip poll
-    if not _matches_mode(before, mode):
-        for waited in range(0, timeout, 2):
-            time.sleep(2)
-            after = _route_dev()
-            if _matches_mode(after, mode):
-                logger.info(f"[{label}] Route chuyển sang {after} sau {waited + 2}s")
-                break
+    # Nếu đã đúng interface → trả về luôn
+    if _matches_mode(before, mode):
+        logger.info(f"[{label}] Đã đúng interface {before}")
+        return True, f"{label} đã kết nối qua {before}"
 
-    after = _route_dev()
-
-    if _matches_mode(after, mode):
-        has_internet = check_internet_via_interface(after)
-        if has_internet:
-            logger.info(f"[{label}] Kết nối thành công qua {after}")
+    # Poll chờ route chuyển sang đúng interface
+    for waited in range(0, timeout, 2):
+        time.sleep(2)
+        after = _route_dev()
+        if _matches_mode(after, mode):
+            logger.info(f"[{label}] Route chuyển sang {after} sau {waited + 2}s")
             return True, f"{label} đã kết nối qua {after}"
-        if allow_no_internet:
-            logger.warning(f"[{label}] {after} đã kết nối nhưng không có internet")
-            return True, f"{label} đã kết nối qua {after} (không có internet)"
-        return False, f"{label} interface {after} đã lên nhưng không có internet"
 
     if mode == "4g":
-        logger.warning(f"[LTE] Chưa có interface sau {timeout}s, mode đã lưu cho watchdog")
         return False, f"LTE chưa sẵn sàng sau {timeout}s, mode đã lưu cho watchdog"
 
     return False, f"{label} interface không tìm thấy sau {timeout}s"
@@ -544,7 +532,7 @@ def _setup_network_via_watchdog(
 
 def _setup_lan(timeout: int) -> Tuple[bool, str]:
     """Kết nối LAN qua network-watchdog."""
-    return _setup_network_via_watchdog("lan", timeout, allow_no_internet=True)
+    return _setup_network_via_watchdog("lan", timeout)
 
 
 def _setup_lte(timeout: int) -> Tuple[bool, str]:
