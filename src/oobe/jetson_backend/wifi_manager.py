@@ -542,11 +542,29 @@ def connect_wifi(ssid: str, password: str) -> Tuple[bool, str]:
             )
             
             if result.returncode == 0:
-                # Kết nối thành công, đợi một chút để ổn định
-                time.sleep(2)
-                
-                # Kiểm tra xem thực sự có internet chưa
-                if check_internet_connection():
+                # nmcli trả về 0 nhưng WPA handshake có thể chưa hoàn tất.
+                # Chờ rồi xác minh WiFi thực sự đã kết nối đúng SSID.
+                time.sleep(3)
+
+                # Kiểm tra xem WiFi có thực sự connected với đúng SSID không
+                current_ssid = get_current_connection()
+                if current_ssid != ssid:
+                    logger.warning(
+                        f"nmcli trả về OK nhưng WiFi không connected đúng SSID "
+                        f"(expected={ssid}, actual={current_ssid})"
+                    )
+                    # Xóa connection profile bị lỗi
+                    try:
+                        subprocess.run(
+                            ["nmcli", "connection", "delete", ssid],
+                            capture_output=True, timeout=10
+                        )
+                    except Exception:
+                        pass
+                    return False, "Sai mật khẩu WiFi"
+
+                # WiFi đã connected, kiểm tra internet qua đúng WiFi interface
+                if check_internet_via_interface(interface):
                     logger.info(f"✓ Kết nối thành công đến {ssid}")
                     return True, f"Kết nối thành công đến {ssid}"
                 else:
