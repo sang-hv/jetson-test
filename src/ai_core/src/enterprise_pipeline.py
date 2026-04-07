@@ -206,8 +206,9 @@ class EnterprisePipeline(BasePipeline):
             label = self.track_manager.get_label(tid)
             track_info = self.track_manager.get_track_info(tid)
             confidence = track_info.get("avg_score") if track_info else None
+            annotated_frame = draw_restricted_zone(frame, self.config.restricted_zone)
             detection_result = self.detection_saver.save_frame_with_box(
-                frame, person.bbox, "restricted_zone", tid, label
+                annotated_frame, person.bbox, "restricted_zone", tid, label
             )
 
             detections.append({
