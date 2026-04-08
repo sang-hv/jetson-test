@@ -920,12 +920,19 @@ class WiFiSetupHandler:
             if success:
                 logger.info(f"Kết nối thành công: {message}")
                 if self.status_chrc:
-                    GLib.idle_add(
-                        lambda: self.status_chrc.set_status(WiFiStatus.SUCCESS)
-                    )
+                    notified = threading.Event()
 
-                # Đợi một chút rồi thoát
-                time.sleep(3)
+                    def _notify_wifi_success():
+                        self.status_chrc.set_status(WiFiStatus.SUCCESS)
+                        logger.info("Đã gửi BLE notification SUCCESS cho WiFi")
+                        notified.set()
+
+                    GLib.idle_add(_notify_wifi_success)
+                    if not notified.wait(timeout=5):
+                        logger.warning("Timeout chờ gửi BLE notification SUCCESS cho WiFi")
+
+                # Chờ thêm để BlueZ truyền BLE packet và app nhận được
+                time.sleep(5)
                 logger.info("Kết nối WiFi thành công, đang thoát BLE setup...")
                 if self.mainloop:
                     GLib.idle_add(self.mainloop.quit)
@@ -1160,11 +1167,22 @@ class NetSetupHandler:
         if success:
             logger.info(f"Setup mạng thành công: {message}")
             if self.net_setup_status_chrc:
-                GLib.idle_add(
-                    lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.SUCCESS)
-                )
-            # Chờ app đọc trạng thái SUCCESS rồi thoát BLE server
-            time.sleep(3)
+                # Dùng Event để đảm bảo notification đã được gửi trước khi quit
+                notified = threading.Event()
+
+                def _notify_success():
+                    self.net_setup_status_chrc.set_status(NetSetupStatus.SUCCESS)
+                    logger.info("Đã gửi BLE notification SUCCESS cho net setup")
+                    notified.set()
+
+                GLib.idle_add(_notify_success)
+                # Chờ notification thực sự được xử lý bởi main loop (tối đa 5s)
+                if not notified.wait(timeout=5):
+                    logger.warning("Timeout chờ gửi BLE notification SUCCESS")
+
+            # Chờ thêm để BlueZ truyền BLE packet và app nhận được
+            time.sleep(5)
+            logger.info("Đã chờ đủ, thoát BLE server...")
             if self.mainloop:
                 GLib.idle_add(self.mainloop.quit)
         else:
