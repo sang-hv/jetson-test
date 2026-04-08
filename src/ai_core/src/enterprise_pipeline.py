@@ -12,6 +12,7 @@ Extends BasePipeline with:
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, List
 
 import numpy as np
@@ -28,6 +29,16 @@ from .utils import (
 
 if TYPE_CHECKING:
     from .pipeline import Config
+
+
+@dataclass
+class _PendingRestrictedAlert:
+    """State for a track inside the restricted zone awaiting identity resolution."""
+
+    track_id: int
+    entered_at: float       # time.time() when first detected in zone as unknown
+    last_bbox: np.ndarray   # updated each frame for image saving
+    last_frame: np.ndarray  # updated each frame for image saving
 
 
 class EnterprisePipeline(BasePipeline):
@@ -50,6 +61,9 @@ class EnterprisePipeline(BasePipeline):
         # Restricted zone alert: per-track cooldown
         self._restricted_alert_last_notified: Dict[int, float] = {}
         self._restricted_alert_cooldown: float = 10.0  # seconds
+        # Deferred alert: wait for identity resolution before sending
+        self._pending_restricted_alerts: Dict[int, _PendingRestrictedAlert] = {}
+        self._restricted_alert_id_wait_timeout: float = 5.0  # seconds
 
         # PPE violation alert: maps track_id → set of violation types already alerted (reset when track leaves frame)
         self._ppe_alerted_tracks: Dict[int, set] = {}
@@ -179,53 +193,136 @@ class EnterprisePipeline(BasePipeline):
             payload = {"timestamp": time.time(), "detections": detections}
             self.zmq_publisher.send_employee_crossing(payload)
 
+    @staticmethod
+    def _is_identified(label: str) -> bool:
+        """Return True if the label represents a confirmed identity."""
+        return label != "Unknown" and not label.endswith("?")
+
+    def _build_restricted_detection(
+        self, tid: int, label: str, bbox: np.ndarray, frame: np.ndarray,
+    ) -> dict:
+        """Build a single detection dict for the restricted zone alert payload."""
+        track_info = self.track_manager.get_track_info(tid)
+        confidence = track_info.get("avg_score") if track_info else None
+        annotated_frame = draw_restricted_zone(frame, self.config.restricted_zone)
+        detection_result = self.detection_saver.save_frame_with_box(
+            annotated_frame, bbox, "restricted_zone", tid, label,
+        )
+        return {
+            "track_id": tid,
+            "person_id": label,
+            "confidence": confidence,
+            "detection_result": detection_result,
+        }
+
     def _check_restricted_zone(
         self, tracked_persons: List[TrackedPerson], frame: np.ndarray
     ) -> None:
-        """Alert when a person's bbox center enters the restricted zone."""
+        """Alert when a person's bbox center enters the restricted zone.
+
+        If the person is unknown/uncertain, defer the alert up to
+        ``_restricted_alert_id_wait_timeout`` seconds to allow face
+        recognition to resolve their identity.  The deferred alert fires
+        when the person is identified, the timeout elapses, or the person
+        leaves the zone / track is lost.
+        """
         min_x, min_y, max_x, max_y = self.config.restricted_zone
         fh, fw = frame.shape[:2]
         now = time.time()
-        detections = []
+        detections: List[dict] = []
 
+        # --- Phase A: build per-track lookup & zone membership ---
+        person_lookup: Dict[int, tuple] = {}  # tid -> (person, in_zone)
+        in_zone_tids: set = set()
         for person in tracked_persons:
             tid = person.track_id
             x1, y1, x2, y2 = person.bbox.astype(int)
             cx_ratio = ((x1 + x2) / 2) / fw
             cy_ratio = ((y1 + y2) / 2) / fh
+            is_in_zone = min_x <= cx_ratio <= max_x and min_y <= cy_ratio <= max_y
+            person_lookup[tid] = (person, is_in_zone)
+            if is_in_zone:
+                in_zone_tids.add(tid)
 
-            if not (min_x <= cx_ratio <= max_x and min_y <= cy_ratio <= max_y):
-                continue
+        active_ids = set(person_lookup.keys())
 
+        # --- Phase B: new entries into the zone ---
+        for tid in in_zone_tids:
+            if tid in self._pending_restricted_alerts:
+                continue  # already pending, handled in Phase C
             elapsed = now - self._restricted_alert_last_notified.get(tid, 0.0)
             if elapsed < self._restricted_alert_cooldown:
                 continue
 
-            self._restricted_alert_last_notified[tid] = now
-
             label = self.track_manager.get_label(tid)
-            track_info = self.track_manager.get_track_info(tid)
-            confidence = track_info.get("avg_score") if track_info else None
-            annotated_frame = draw_restricted_zone(frame, self.config.restricted_zone)
-            detection_result = self.detection_saver.save_frame_with_box(
-                annotated_frame, person.bbox, "restricted_zone", tid, label
-            )
+            person, _ = person_lookup[tid]
 
-            detections.append({
-                "track_id": tid,
-                "person_id": label,
-                "confidence": confidence,
-                "detection_result": detection_result,
-            })
+            if self._is_identified(label):
+                # Known person — send immediately
+                self._restricted_alert_last_notified[tid] = now
+                detections.append(
+                    self._build_restricted_detection(tid, label, person.bbox, frame)
+                )
+            else:
+                # Unknown / uncertain — defer to allow identification
+                self._pending_restricted_alerts[tid] = _PendingRestrictedAlert(
+                    track_id=tid,
+                    entered_at=now,
+                    last_bbox=person.bbox.copy(),
+                    last_frame=frame.copy(),
+                )
 
+        # --- Phase C: resolve existing pending alerts ---
+        resolved_tids: List[int] = []
+        for tid, pending in self._pending_restricted_alerts.items():
+            label = self.track_manager.get_label(tid)
+            elapsed = now - pending.entered_at
+
+            send_now = False
+            use_stored = False  # use stored frame/bbox when track is lost
+
+            if self._is_identified(label):
+                send_now = True
+            elif elapsed >= self._restricted_alert_id_wait_timeout:
+                send_now = True
+            elif tid not in active_ids:
+                # track lost entirely
+                send_now = True
+                use_stored = True
+            elif tid not in in_zone_tids:
+                # person left the zone
+                send_now = True
+
+            if send_now:
+                resolved_tids.append(tid)
+                self._restricted_alert_last_notified[tid] = now
+                if use_stored:
+                    detections.append(self._build_restricted_detection(
+                        tid, label, pending.last_bbox, pending.last_frame,
+                    ))
+                else:
+                    person, _ = person_lookup[tid]
+                    detections.append(self._build_restricted_detection(
+                        tid, label, person.bbox, frame,
+                    ))
+            else:
+                # still pending — keep stored frame/bbox up to date
+                if tid in active_ids:
+                    person, _ = person_lookup[tid]
+                    pending.last_bbox = person.bbox.copy()
+                    pending.last_frame = frame.copy()
+
+        for tid in resolved_tids:
+            del self._pending_restricted_alerts[tid]
+
+        # --- Phase D: send batched detections ---
         if detections:
             self.zmq_publisher.send_restricted_zone_alert({
                 "timestamp": now,
                 "detections": detections,
             })
 
-        # Purge stale cooldown entries for tracks no longer in frame
-        active_ids = {p.track_id for p in tracked_persons}
+        # --- Phase E: purge stale cooldown entries ---
         self._restricted_alert_last_notified = {
             tid: t for tid, t in self._restricted_alert_last_notified.items()
             if tid in active_ids
