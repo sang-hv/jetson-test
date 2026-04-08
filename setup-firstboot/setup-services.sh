@@ -134,6 +134,7 @@ BACKEND_URL="${BACKEND_URL:-}"
 SECRET_KEY="${SECRET_KEY:-}"
 
 mkdir -p /etc/device /opt/device
+mkdir -p /data/mini-pc/db
 
 if [ -f /etc/device/device.env ]; then
     log "Device identity already configured"
@@ -158,6 +159,7 @@ ENVEOF
 fi
 chmod 600 /etc/device/device.env
 chmod a+r /etc/device/device.env
+chmod -R 777 /data/mini-pc/db
 
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
