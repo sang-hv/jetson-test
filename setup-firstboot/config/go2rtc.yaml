@@ -1,9 +1,9 @@
 streams:
   # camera-stream.service → tcpserversink :8553
-  # Use exec:bash wrapper instead of tcp:// to avoid go2rtc 1.9.14 panic
-  # on MPEG-TS SPS/PPS parse. bash cat reads from byte 0 → SPS/PPS always present.
+  # go2rtc 1.9.14 panics (nil pointer in codec.go:132) when parsing
+  # MPEG-TS directly. Use exec:ffmpeg to demux MPEG-TS → raw H264+AAC pipe.
   camera:
-    - exec:bash -c "cat < /dev/tcp/localhost/8553"
+    - exec:ffmpeg -i tcp://localhost:8553 -c copy -f mpegts pipe:1
 
 api:
   listen: ":1984"

@@ -30,6 +30,18 @@ fi
 
 step "Phase 1/8: System packages"
 apt-get update -qq 2>&1 | tail -1 | tee -a "$LOG_FILE"
+
+# Hold all NVIDIA/L4T packages BEFORE upgrade to prevent them from being
+# upgraded to incompatible versions that break the camera pipeline.
+L4T_HOLD_EARLY=(
+    nvidia-l4t-multimedia nvidia-l4t-gstreamer nvidia-l4t-camera
+    nvidia-l4t-core nvidia-l4t-cuda nvidia-l4t-nvsci
+    nvidia-l4t-multimedia-utils nvidia-l4t-init nvidia-l4t-3d-core
+    nvidia-l4t-firmware
+)
+apt-mark hold "${L4T_HOLD_EARLY[@]}" 2>/dev/null || true
+log "NVIDIA L4T packages held before upgrade"
+
 apt-get upgrade -y -qq 2>&1 | tail -3 | tee -a "$LOG_FILE"
 
 apt-get install -y -qq \
