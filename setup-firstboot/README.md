@@ -28,7 +28,8 @@ setup-firstboot/
 │   ├── start-stream.py              # GStreamer pipeline (CSI → H.264 + AI SHM)
 │   ├── setup-audio-autostart.sh     # PulseAudio + echo cancel on boot
 │   ├── sync-config.py               # Cronjob: sync config from backend API
-│   ├── device-update.py             # Cronjob: heartbeat (last_seen)
+│   ├── device-update.py             # Cronjob: heartbeat (last_seen + software_version)
+│   ├── run-update.sh                # OTA: git fetch + checkout + deploy + callback
 │   ├── setup-4g.sh                  # SIM7600 modem init via ModemManager
 │   ├── network-watchdog.sh          # Connectivity monitor + failover routing
 │   └── switch-network.sh            # CLI: switch network mode (auto/4g/lan/wifi)
@@ -38,6 +39,7 @@ setup-firstboot/
 │   ├── backchannel.service          # Audio backchannel WebSocket
 │   ├── person-count-ws.service      # ZMQ → WebSocket bridge
 │   ├── stream-auth.service          # Nginx token validator
+│   ├── device-update-server.service # OTA update server
 │   ├── audio-autostart.service      # PulseAudio user service
 │   ├── sim7600-4g.service           # 4G modem init
 │   ├── network-watchdog.service     # Network failover daemon
@@ -45,6 +47,8 @@ setup-firstboot/
 ├── backchannel/
 │   ├── server.py                    # WebSocket audio server (WebM/Opus + PCMU/G.711)
 │   └── start.sh                     # PulseAudio env wrapper
+├── device_update/
+│   └── server.py                    # OTA update HTTP server (HMAC auth, port 8092)
 ├── person_count_ws/
 │   ├── server.py                    # ZMQ SUB → WebSocket broadcast
 │   └── start.sh                     # Exec wrapper
@@ -139,6 +143,12 @@ sudo ./master-setup.sh network-watchdog go2rtc
                         │   ├─ detection_zones, face_embeddings       │
                         │   └─ cloudflare tunnel token                │
                         │                                             │
+  Backend API ─────────►│ device-update-server :8092 (OTA)            │
+  (via tunnel)          │   └─ POST /update → run-update.sh           │
+                        │       ├─ git fetch + checkout <tag>          │
+                        │       ├─ setup-services.sh --restart-all     │
+                        │       └─ callback ACK → backend API          │
+                        │                                             │
   SIM7600 4G ──────────►│ network-watchdog.sh                         │
   LAN / WiFi            │   └─ auto failover: LAN > WiFi > 4G         │
                         └─────────────────────────────────────────────┘
@@ -153,6 +163,7 @@ sudo ./master-setup.sh network-watchdog go2rtc
 | backchannel | 8080 | simple | Client audio → speaker (WebSocket) |
 | person-count-ws | 8090 | simple | AI person count → WebSocket broadcast |
 | stream-auth | 8091 | simple | Token validation for nginx auth_request |
+| device-update-server | 8092 | simple | OTA update endpoint (backend → device) |
 | nginx | 80 | - | Reverse proxy + auth routing |
 | sim7600-4g | - | oneshot | 4G modem initialization |
 | network-watchdog | - | simple | Connectivity monitor + failover |
@@ -170,6 +181,9 @@ camera-stream
 backchannel (independent, Restart=always)
   ├─► ExecStartPre: check echocancel_sink exists, create only if missing
   └─► pacat --device echocancel_sink
+
+device-update-server (independent, Restart=always)
+  └─► stream-auth (After, Wants — ensures auth service is ready)
 
 sim7600-4g ──► network-watchdog (Wants, parallel start)
 ```
@@ -199,6 +213,90 @@ sudo /opt/4g/switch-network.sh auto   # or: 4g, lan, wifi
 - After `MAX_RETRIES` failures (default: 3), restarts `sim7600-4g` service
 - Sends SIGHUP on config reload to re-apply routing metrics
 - Interface detection: eth0/enp* (LAN), wlan*/wlp* (WiFi), usb*/wwan* (4G)
+
+## OTA Software Update
+
+Devices can be updated remotely via backend API, triggered from mobile app.
+
+### Flow
+
+```
+Mobile App                    Backend API                      Jetson Nano
+    │                              │                                │
+    ├─ POST /cameras/{id}/update ─►│                                │
+    │   { version, run_install }   │                                │
+    │                              ├─ POST /update (via tunnel) ───►│
+    │                              │   (HMAC auth)                  ├─ Return 200 immediately
+    │                              │                                ├─ git fetch origin
+    │                              │◄─ 200 { status: accepted } ───┤  git checkout <tag>
+    │                              │                                ├─ setup-services.sh --restart-all
+    │                              ├─ update_logs.status =          │  (or master-setup.sh if run_install)
+    │                              │    "in_progress"               │
+    │                              │                                ├─ Health check services
+    │                              │◄─ PATCH /update-logs/{id}/ack ┤
+    │                              │   { status, version, error }   │
+    │◄── query update_logs ────────┤                                │
+    │    (success / failed)        │                                │
+```
+
+### Backend triggers update
+
+Backend calls device directly through Cloudflare tunnel:
+
+```
+POST https://<device-tunnel-url>/update
+Headers:
+  X-Device-ID: <device_id>
+  X-Timestamp: <unix_ts>
+  X-Signature: HMAC-SHA256(secret_key, "{device_id}|{timestamp}")
+Body:
+  {
+    "version": "v1.2.0",
+    "run_install": false,
+    "update_log_id": "uuid"
+  }
+```
+
+- `version` — git tag or branch to checkout
+- `run_install` — `true` runs `master-setup.sh` (apt install + deploy), `false` runs `setup-services.sh` only
+- `update_log_id` — backend UUID for the device to ACK results
+
+Device responds `200 { status: "accepted" }` immediately, then runs the update in background.
+
+### Device callback
+
+After update completes (or fails), device calls backend:
+
+```
+PATCH /api/v1/update-logs/{update_log_id}/ack
+Headers: X-Device-ID, X-Timestamp, X-Signature (same HMAC scheme)
+Body:
+  { "status": "success", "software_version": "v1.2.0" }
+  or
+  { "status": "failed", "software_version": "v1.1.0", "error": "..." }
+```
+
+### Timeout handling
+
+If device doesn't ACK within 1 hour, backend marks `update_logs.status = "failed"` on next query.
+
+### Version tracking
+
+- Device reports `software_version` (from `git describe --tags`) in every heartbeat (`device-update.py`, every 5 min)
+- Backend stores in `cameras.software_version`
+- Health check: `GET /update/health` returns `{ "status": "idle" | "updating" }`
+
+### Update process (on device)
+
+1. Acquire lock (`/tmp/device-update.lock`) — prevents concurrent updates
+2. `git fetch origin`
+3. `git checkout <version>`
+4. Run `setup-services.sh --restart-all` (or `master-setup.sh --restart-all`)
+5. Health check: verify `go2rtc`, `camera-stream`, `stream-auth`, `nginx` are running
+6. ACK backend with result
+7. Release lock
+
+Logs: `/tmp/device-update-<version>.log`
 
 ## Authentication
 
@@ -268,6 +366,7 @@ Device identity: `/etc/device/device.env` (DEVICE_ID, BACKEND_URL, SECRET_KEY).
 /etc/device/
 ├── device.env           # DEVICE_ID, BACKEND_URL, SECRET_KEY
 ├── network.conf         # NETWORK_MODE, APN, PING_HOST, CHECK_INTERVAL
+├── repo-path            # Path to setup-firstboot git repo (for OTA)
 ├── config.json          # Last synced backend config
 └── config.prev.json     # Previous config (for diff)
 
@@ -276,7 +375,8 @@ Device identity: `/etc/device/device.env` (DEVICE_ID, BACKEND_URL, SECRET_KEY).
 ├── backchannel/         # Audio backchannel
 ├── person_count_ws/     # ZMQ→WS bridge
 ├── stream_auth/         # Token validator
-├── device/              # sync-config.py, device-update.py
+├── device_update/       # OTA update server (server.py)
+├── device/              # sync-config.py, device-update.py, run-update.sh
 ├── 4g/                  # setup-4g.sh, network-watchdog.sh, switch-network.sh
 └── audio/               # setup-audio-autostart.sh
 
@@ -296,7 +396,7 @@ Device identity: `/etc/device/device.env` (DEVICE_ID, BACKEND_URL, SECRET_KEY).
 
 ```bash
 # All services status
-sudo systemctl status camera-stream go2rtc backchannel person-count-ws stream-auth nginx sim7600-4g network-watchdog cloudflared
+sudo systemctl status camera-stream go2rtc backchannel person-count-ws stream-auth device-update-server nginx sim7600-4g network-watchdog cloudflared
 systemctl --user status audio-autostart
 
 # Logs (follow)
@@ -322,6 +422,13 @@ ls -la /dev/shm/mini_pc_ai_frames.bin
 cat /etc/device/device.env             # Device identity
 sudo journalctl -u cron --grep="sync-config\|device-update" --since="1 hour ago"
 
+# OTA update
+sudo systemctl status device-update-server   # Update server status
+curl http://127.0.0.1:8092/health            # Update health check
+cat /tmp/device-update-*.log                 # Update logs
+cat /etc/device/repo-path                    # Git repo path
+cd $(cat /etc/device/repo-path) && git describe --tags --always  # Current version
+
 # Token validation
 python3 /opt/stream_auth/check_token.py <token>
 ```
@@ -337,4 +444,7 @@ python3 /opt/stream_auth/check_token.py <token>
 | No person count | `journalctl -u person-count-ws` | Verify ai_core is publishing on ZMQ :5555 |
 | Backchannel no sound | `journalctl -u backchannel` | Check `echocancel_sink` exists, restart camera-stream |
 | Config not syncing | `cat /etc/device/device.env` | Verify BACKEND_URL reachable, check SECRET_KEY |
+| OTA update not responding | `systemctl status device-update-server` | Restart service, check `/etc/device/device.env` |
+| OTA update failed | `cat /tmp/device-update-*.log` | Check git access, disk space, service health |
+| Version not reporting | `python3 /opt/device/device-update.py` | Check `repo-path`, git tags |
 | Network keeps switching | `journalctl -u network-watchdog` | Adjust `CHECK_INTERVAL` / `MAX_RETRIES` in network.conf |

@@ -17,6 +17,7 @@
 import hashlib
 import hmac
 import json
+import os
 import subprocess
 import sys
 import time
@@ -48,8 +49,47 @@ def load_env(path: Path) -> dict[str, str]:
     return env
 
 
+def get_software_version() -> str:
+    """Get current software version from git tag or 'unknown'."""
+    # Check repo path marker first
+    repo_path = None
+    marker = Path("/etc/device/repo-path")
+    if marker.exists():
+        rp = marker.read_text().strip()
+        if os.path.isdir(rp):
+            repo_path = rp
+
+    if not repo_path:
+        # Search common locations
+        for pattern in ["/home/*/setup/setup-firstboot", "/home/*/setup-firstboot"]:
+            import glob
+            for d in glob.glob(pattern):
+                if os.path.isfile(os.path.join(d, "setup-services.sh")):
+                    repo_path = d
+                    break
+            if repo_path:
+                break
+
+    if not repo_path:
+        return "unknown"
+
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 def patch_device_update(device_id: str, backend_url: str, secret_key: str) -> bool:
-    """Call device-update endpoint to refresh last_seen."""
+    """Call device-update endpoint to refresh last_seen and software_version."""
     ts = str(int(time.time()))
     sig = hmac.new(
         secret_key.encode(),
@@ -65,7 +105,10 @@ def patch_device_update(device_id: str, backend_url: str, secret_key: str) -> bo
         .isoformat(timespec="seconds")
         + "Z"
     )
-    payload = {"last_seen": last_seen}
+    payload = {
+        "last_seen": last_seen,
+        "software_version": get_software_version(),
+    }
     result = subprocess.run(
         [
             "curl",

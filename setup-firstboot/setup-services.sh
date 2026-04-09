@@ -114,7 +114,7 @@ else
     VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
-step "Phase 1/7: go2rtc stream services"
+step "Phase 1/8: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
@@ -128,7 +128,7 @@ systemctl daemon-reload
 systemctl enable camera-stream.service go2rtc.service
 log "camera-stream + go2rtc configured"
 
-step "Phase 2/7: device identity and sync scripts"
+step "Phase 2/8: device identity and sync scripts"
 DEVICE_ID="${DEVICE_ID:-}"
 BACKEND_URL="${BACKEND_URL:-}"
 SECRET_KEY="${SECRET_KEY:-}"
@@ -197,14 +197,14 @@ if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     python3 /opt/device/device-update.py 2>&1 | tee -a "$LOG_FILE" || warn "First update device failed (cron will retry)"
 fi
 
-step "Phase 3/7: cloudflared service check"
+step "Phase 3/8: cloudflared service check"
 if systemctl is-active cloudflared >/dev/null 2>&1; then
     log "Cloudflared tunnel already running"
 else
     warn "Cloudflared installed — tunnel will be configured after sync-config runs"
 fi
 
-step "Phase 4/7: backchannel, person-count ws, and stream-auth"
+step "Phase 4/8: backchannel, person-count ws, and stream-auth"
 mkdir -p /opt/backchannel /opt/person_count_ws /opt/stream_auth
 cp "$SCRIPT_DIR/backchannel/server.py" /opt/backchannel/server.py
 cp "$SCRIPT_DIR/backchannel/start.sh" /opt/backchannel/start.sh
@@ -227,7 +227,21 @@ systemctl daemon-reload
 systemctl enable backchannel.service person-count-ws.service stream-auth.service
 log "Backchannel + person-count ws + stream-auth configured"
 
-step "Phase 5/7: nginx reverse proxy"
+step "Phase 5/8: device OTA update server"
+mkdir -p /opt/device_update
+cp "$SCRIPT_DIR/device_update/server.py" /opt/device_update/server.py
+cp "$SCRIPT_DIR/scripts/run-update.sh" /opt/device/run-update.sh
+chmod +x /opt/device/run-update.sh
+
+# Save repo path so run-update.sh and device-update.py can find the git repo
+echo "$SCRIPT_DIR" > /etc/device/repo-path
+
+cp "$SCRIPT_DIR/services/device-update-server.service" /etc/systemd/system/device-update-server.service
+systemctl daemon-reload
+systemctl enable device-update-server.service
+log "Device OTA update server configured"
+
+step "Phase 6/8: nginx reverse proxy"
 cp "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/go2rtc
 ln -sf /etc/nginx/sites-available/go2rtc /etc/nginx/sites-enabled/go2rtc
 rm -f /etc/nginx/sites-enabled/default
@@ -235,7 +249,7 @@ nginx -t 2>&1 | tee -a "$LOG_FILE"
 systemctl enable nginx
 log "Nginx configured"
 
-step "Phase 6/7: audio autostart"
+step "Phase 7/8: audio autostart"
 mkdir -p /opt/audio
 cp "$SCRIPT_DIR/scripts/setup-audio-autostart.sh" /opt/audio/setup-audio-autostart.sh
 chmod +x /opt/audio/setup-audio-autostart.sh
@@ -249,7 +263,7 @@ su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSIO
 loginctl enable-linger "$ACTUAL_USER"
 log "Audio autostart service enabled"
 
-step "Phase 7/7: SIM7600 scripts/services"
+step "Phase 8/8: SIM7600 scripts/services"
 mkdir -p /opt/4g
 cp "$SCRIPT_DIR/scripts/setup-4g.sh" /opt/4g/setup-4g.sh
 cp "$SCRIPT_DIR/scripts/network-watchdog.sh" /opt/4g/network-watchdog.sh
@@ -294,6 +308,7 @@ echo "    nginx           → sudo systemctl status nginx"
 echo "    audio-auto      → systemctl --user status audio-autostart"
 echo "    sync-config     → crontab -l (every 5 min)"
 echo "    device-update   → crontab -l (every 5 min)"
+echo "    update-server   → sudo systemctl status device-update-server"
 echo "    sim7600-4g      → sudo systemctl status sim7600-4g"
 echo "    net-watchdog    → sudo systemctl status network-watchdog"
 echo ""
