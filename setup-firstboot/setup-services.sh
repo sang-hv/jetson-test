@@ -132,29 +132,44 @@ step "Phase 2/8: device identity and sync scripts"
 DEVICE_ID="${DEVICE_ID:-}"
 BACKEND_URL="${BACKEND_URL:-}"
 SECRET_KEY="${SECRET_KEY:-}"
+FORCE_DEVICE_ENV="${FORCE_DEVICE_ENV:-0}"
 
 mkdir -p /etc/device /opt/device
 mkdir -p /data/mini-pc/db
 
-if [ -f /etc/device/device.env ]; then
-    log "Device identity already configured"
+if [ "$FORCE_DEVICE_ENV" = "1" ]; then
+    if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
+        err "FORCE_DEVICE_ENV=1 but DEVICE_ID/BACKEND_URL/SECRET_KEY is empty"
+        exit 1
+    fi
+    cat > /etc/device/device.env << ENVEOF
+DEVICE_ID=$DEVICE_ID
+BACKEND_URL=$BACKEND_URL
+SECRET_KEY=$SECRET_KEY
+ENVEOF
+    log "Device identity written (forced) → /etc/device/device.env"
     source /etc/device/device.env
 else
-    if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
-        warn "Device identity not provided via env vars"
-        cat > /etc/device/device.env << 'ENVEOF'
+    if [ -f /etc/device/device.env ]; then
+        log "Device identity already configured"
+        source /etc/device/device.env
+    else
+        if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
+            warn "Device identity not provided via env vars"
+            cat > /etc/device/device.env << 'ENVEOF'
 # Device Identity — edit these values
 DEVICE_ID=
 BACKEND_URL=
 SECRET_KEY=
 ENVEOF
-    else
-        cat > /etc/device/device.env << ENVEOF
+        else
+            cat > /etc/device/device.env << ENVEOF
 DEVICE_ID=$DEVICE_ID
 BACKEND_URL=$BACKEND_URL
 SECRET_KEY=$SECRET_KEY
 ENVEOF
-        log "Device identity saved → /etc/device/device.env"
+            log "Device identity saved → /etc/device/device.env"
+        fi
     fi
 fi
 chmod 600 /etc/device/device.env
