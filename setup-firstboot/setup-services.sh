@@ -387,6 +387,10 @@ if [ -d "$AI_SRC" ]; then
         cp "$AI_SRC/.env.example" "$AI_DST/.env"
         warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
     fi
+    # Install Python deps into shared venv
+    if [ -d "$VENV_DIR" ] && [ -f "$AI_SRC/requirements.txt" ]; then
+        "$VENV_DIR/bin/pip" install -q -r "$AI_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    fi
     cp "$SCRIPT_DIR/services/ai-core.service" /etc/systemd/system/ai-core.service
     systemctl daemon-reload
     systemctl enable ai-core.service
