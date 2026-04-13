@@ -1,0 +1,29 @@
+[Unit]
+Description=OOBE WiFi/Network Setup via BLE
+After=bluetooth.target network-online.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+ExecStart=/usr/bin/python3 /opt/oobe-setup/ble_wifi_setup.py
+
+Restart=on-failure
+RestartSec=10
+
+TimeoutStartSec=30
+TimeoutStopSec=15
+WatchdogSec=120
+
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oobe-setup
+
+WorkingDirectory=/opt/oobe-setup
+
+[Install]
+WantedBy=multi-user.target

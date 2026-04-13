@@ -328,6 +328,9 @@ if DBUS_AVAILABLE:
         """
         PATH_BASE = "/org/bluez/oobe/characteristic"
 
+        # Class-level reference to BLEServer (set once in BLEServer.start)
+        _ble_server: Optional['BLEServer'] = None
+
         def __init__(self, bus, index, uuid, flags, service):
             self.path = f"{service.get_path()}/char{index}"
             self.bus = bus
@@ -337,6 +340,11 @@ if DBUS_AVAILABLE:
             self.value = []
             self.notifying = False
             dbus.service.Object.__init__(self, bus, self.path)
+
+        def _touch(self):
+            """Reset BLE idle timer on any client interaction."""
+            if self._ble_server is not None:
+                self._ble_server.touch_activity()
 
         def get_properties(self):
             return {
@@ -362,16 +370,19 @@ if DBUS_AVAILABLE:
 
         @dbus.service.method(GATT_CHRC_IFACE, in_signature='a{sv}', out_signature='ay')
         def ReadValue(self, options):
+            self._touch()
             logger.debug(f"Đọc characteristic: {self.uuid}")
             return self.value
 
         @dbus.service.method(GATT_CHRC_IFACE, in_signature='aya{sv}')
         def WriteValue(self, value, options):
+            self._touch()
             logger.debug(f"Ghi characteristic: {self.uuid}")
             self.value = value
 
         @dbus.service.method(GATT_CHRC_IFACE)
         def StartNotify(self):
+            self._touch()
             if self.notifying:
                 return
             self.notifying = True
@@ -393,11 +404,14 @@ if DBUS_AVAILABLE:
             if not self.notifying:
                 return
             self.value = value
-            self.PropertiesChanged(
-                GATT_CHRC_IFACE,
-                {'Value': dbus.Array(value, signature='y')},
-                []
-            )
+            try:
+                self.PropertiesChanged(
+                    GATT_CHRC_IFACE,
+                    {'Value': dbus.Array(value, signature='y')},
+                    []
+                )
+            except Exception as e:
+                logger.warning(f"notify_value failed for {self.uuid}: {e}")
 
     # =============================================================================
     # OOBE SPECIFIC CHARACTERISTICS
@@ -1265,9 +1279,12 @@ class BLEServer:
     Bao gồm:
     - Advertisement (quảng cáo)
     - GATT Application (services và characteristics)
-    - Main loop
+    - Main loop with idle timeout to prevent hangs
     """
-    
+
+    # Max idle time (seconds) without any BLE activity before auto-shutdown.
+    IDLE_TIMEOUT = 600  # 10 minutes
+
     def __init__(self):
         self.mainloop = None
         self.bus = None
@@ -1279,6 +1296,21 @@ class BLEServer:
         self.auth_manager = None
         self.net_status_handler = None
         self.net_setup_handler = None
+        self._idle_source_id = None
+        self._last_activity = time.monotonic()
+
+    def touch_activity(self):
+        """Reset idle timer — called on any BLE read/write/notify."""
+        self._last_activity = time.monotonic()
+
+    def _idle_watchdog(self) -> bool:
+        """GLib timeout callback: quit if idle too long."""
+        elapsed = time.monotonic() - self._last_activity
+        if elapsed > self.IDLE_TIMEOUT:
+            logger.warning(f"BLE idle for {int(elapsed)}s, auto-shutdown")
+            self.stop()
+            return False
+        return True
 
     def _find_adapter(self):
         """Tìm BLE adapter (hciX)."""
@@ -1293,7 +1325,21 @@ class BLEServer:
                 return path
                 
         return None
-        
+
+    def _reset_bluetooth(self):
+        """Power-cycle the BLE adapter to clear stale state from previous runs."""
+        import subprocess
+        try:
+            subprocess.run(["bluetoothctl", "power", "off"], timeout=5,
+                           capture_output=True)
+            time.sleep(1)
+            subprocess.run(["bluetoothctl", "power", "on"], timeout=5,
+                           capture_output=True)
+            time.sleep(1)
+            logger.info("Bluetooth adapter reset OK")
+        except Exception as e:
+            logger.warning(f"Bluetooth reset failed (non-fatal): {e}")
+
     def start(self):
         """Khởi động BLE Server."""
         if not DBUS_AVAILABLE:
@@ -1301,13 +1347,11 @@ class BLEServer:
             return False
             
         try:
-            # Khởi tạo D-Bus main loop
+            self._reset_bluetooth()
+
             dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-            
-            # Kết nối đến system bus
             self.bus = dbus.SystemBus()
             
-            # Tìm adapter
             adapter_path = self._find_adapter()
             if not adapter_path:
                 logger.error("Không tìm thấy BLE adapter")
@@ -1315,32 +1359,22 @@ class BLEServer:
                 
             logger.info(f"Sử dụng adapter: {adapter_path}")
             
-            # Bật adapter nếu chưa bật
             adapter_props = dbus.Interface(
                 self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                 DBUS_PROP_IFACE
             )
             adapter_props.Set("org.bluez.Adapter1", "Powered", dbus.Boolean(True))
             
-            # Tạo main loop
             self.mainloop = GLib.MainLoop()
             
-            # Tạo Auth Manager (sinh mã PIN)
             self.auth_manager = AuthManager()
-
-            # Tạo WiFi handler
             self.wifi_handler = WiFiSetupHandler(self.mainloop)
-
-            # Tạo WiFi Scan handler
             self.wifi_scan_handler = WiFiScanHandler()
-
-            # Tạo Net Status handler
             self.net_status_handler = NetStatusHandler()
-
-            # Tạo Net Setup handler (LTE/LAN)
             self.net_setup_handler = NetSetupHandler(self.mainloop)
 
-            # Tạo và đăng ký Application (GATT Services)
+            Characteristic._ble_server = self
+
             self.app = Application(self.bus)
             wifi_service = WiFiSetupService(
                 self.bus, 0, self.wifi_handler, self.wifi_scan_handler,
@@ -1348,7 +1382,6 @@ class BLEServer:
             )
             self.app.add_service(wifi_service)
             
-            # Đăng ký GATT
             gatt_manager = dbus.Interface(
                 self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                 GATT_MANAGER_IFACE
@@ -1359,7 +1392,6 @@ class BLEServer:
                 error_handler=lambda e: logger.error(f"Lỗi đăng ký GATT: {e}")
             )
             
-            # Tạo và đăng ký Advertisement
             self.advertisement = OOBEAdvertisement(self.bus, 0)
             
             ad_manager = dbus.Interface(
@@ -1377,19 +1409,21 @@ class BLEServer:
             logger.info(f"Tên thiết bị: {BLE_DEVICE_NAME}")
             logger.info(f"Service UUID: {SERVICE_UUID}")
             logger.info(f"PIN CODE: {self.auth_manager.pin}")
+            logger.info(f"Idle timeout: {self.IDLE_TIMEOUT}s")
             logger.info("Đang chờ kết nối từ Mobile App...")
             logger.info("=" * 50)
 
-            # In PIN ra stdout để dễ nhìn
             print("\n" + "=" * 50)
             print(f"  PIN CODE: {self.auth_manager.pin}")
             print("=" * 50 + "\n")
 
-            # Tự động kiểm tra trạng thái mạng khi khởi động
+            # Idle watchdog: check every 30s
+            self._last_activity = time.monotonic()
+            self._idle_source_id = GLib.timeout_add_seconds(30, self._idle_watchdog)
+
             logger.info("Tự động kiểm tra trạng thái mạng...")
             self.net_status_handler.start_check()
 
-            # Chạy main loop
             self.mainloop.run()
             
             return True
@@ -1403,7 +1437,10 @@ class BLEServer:
     def stop(self):
         """Dừng BLE Server."""
         logger.info("Đang dừng BLE Server...")
-        if self.mainloop:
+        if self._idle_source_id is not None:
+            GLib.source_remove(self._idle_source_id)
+            self._idle_source_id = None
+        if self.mainloop and self.mainloop.is_running():
             self.mainloop.quit()
 
 

@@ -65,6 +65,12 @@ def _get_device_id_from_env_file() -> str:
 _sqs_client = None
 
 
+def _invalidate_sqs_client() -> None:
+    """Drop cached SQS client so it is re-created with fresh env vars on next call."""
+    global _sqs_client
+    _sqs_client = None
+
+
 def _get_sqs_client():
     """Lazy-initialise and return the SQS client."""
     global _sqs_client

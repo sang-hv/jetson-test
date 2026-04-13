@@ -38,7 +38,7 @@ fi
 # ---------------------------------------------------------------------------
 SERVICES_DIR="$SCRIPT_DIR/services"
 
-# Build list of valid service names from the services/ directory
+# Build list of valid service names from the services/ directory + system aliases
 get_valid_services() {
     local f name
     for f in "$SERVICES_DIR"/*.service; do
@@ -46,6 +46,7 @@ get_valid_services() {
         name=$(basename "$f" .service)
         echo "$name"
     done
+    echo "nginx"
 }
 
 restart_service() {
@@ -61,8 +62,16 @@ restart_service() {
             return 0
             ;;
     esac
-    if [ "$name" = "audio-autostart" ]; then
-        # User-level service
+    if [ "$name" = "nginx" ]; then
+        log "Reloading nginx (test config first)..."
+        if nginx -t 2>&1; then
+            systemctl reload nginx 2>&1 \
+                && log "nginx reloaded" \
+                || err "Failed to reload nginx"
+        else
+            err "nginx config test failed — skipping reload"
+        fi
+    elif [ "$name" = "audio-autostart" ]; then
         log "Restarting $name (user service for $ACTUAL_USER)..."
         su - "$ACTUAL_USER" -c \
             "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 \
@@ -114,7 +123,7 @@ else
     VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
-step "Phase 1/8: go2rtc stream services"
+step "Phase 1/11: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
@@ -128,7 +137,7 @@ systemctl daemon-reload
 systemctl enable camera-stream.service go2rtc.service
 log "camera-stream + go2rtc configured"
 
-step "Phase 2/8: device identity and sync scripts"
+step "Phase 2/11: device identity and sync scripts"
 DEVICE_ID="${DEVICE_ID:-}"
 BACKEND_URL="${BACKEND_URL:-}"
 SECRET_KEY="${SECRET_KEY:-}"
@@ -212,14 +221,14 @@ if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     python3 /opt/device/device-update.py 2>&1 | tee -a "$LOG_FILE" || warn "First update device failed (cron will retry)"
 fi
 
-step "Phase 3/8: cloudflared service check"
+step "Phase 3/11: cloudflared service check"
 if systemctl is-active cloudflared >/dev/null 2>&1; then
     log "Cloudflared tunnel already running"
 else
     warn "Cloudflared installed — tunnel will be configured after sync-config runs"
 fi
 
-step "Phase 4/8: backchannel, person-count ws, and stream-auth"
+step "Phase 4/11: backchannel, person-count ws, and stream-auth"
 mkdir -p /opt/backchannel /opt/person_count_ws /opt/stream_auth
 cp "$SCRIPT_DIR/backchannel/server.py" /opt/backchannel/server.py
 cp "$SCRIPT_DIR/backchannel/start.sh" /opt/backchannel/start.sh
@@ -242,7 +251,7 @@ systemctl daemon-reload
 systemctl enable backchannel.service person-count-ws.service stream-auth.service
 log "Backchannel + person-count ws + stream-auth configured"
 
-step "Phase 5/8: device OTA update server"
+step "Phase 5/11: device OTA update server"
 mkdir -p /opt/device_update
 cp "$SCRIPT_DIR/device_update/server.py" /opt/device_update/server.py
 cp "$SCRIPT_DIR/scripts/run-update.sh" /opt/device/run-update.sh
@@ -256,7 +265,7 @@ systemctl daemon-reload
 systemctl enable device-update-server.service
 log "Device OTA update server configured"
 
-step "Phase 6/8: nginx reverse proxy"
+step "Phase 6/11: nginx reverse proxy"
 cp "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/go2rtc
 ln -sf /etc/nginx/sites-available/go2rtc /etc/nginx/sites-enabled/go2rtc
 rm -f /etc/nginx/sites-enabled/default
@@ -264,7 +273,7 @@ nginx -t 2>&1 | tee -a "$LOG_FILE"
 systemctl enable nginx
 log "Nginx configured"
 
-step "Phase 7/8: audio autostart"
+step "Phase 7/11: audio autostart"
 mkdir -p /opt/audio
 cp "$SCRIPT_DIR/scripts/setup-audio-autostart.sh" /opt/audio/setup-audio-autostart.sh
 chmod +x /opt/audio/setup-audio-autostart.sh
@@ -278,7 +287,7 @@ su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSIO
 loginctl enable-linger "$ACTUAL_USER"
 log "Audio autostart service enabled"
 
-step "Phase 8/8: SIM7600 scripts/services"
+step "Phase 8/11: SIM7600 scripts/services"
 mkdir -p /opt/4g
 cp "$SCRIPT_DIR/scripts/setup-4g.sh" /opt/4g/setup-4g.sh
 cp "$SCRIPT_DIR/scripts/network-watchdog.sh" /opt/4g/network-watchdog.sh
@@ -306,6 +315,86 @@ else
     warn "SIM7600 not detected yet — check cable and jumper"
 fi
 
+step "Phase 9/11: OOBE BLE setup"
+OOBE_SRC="$SCRIPT_DIR/../src/oobe/jetson_backend"
+OOBE_DST="/opt/oobe-setup"
+mkdir -p "$OOBE_DST"
+if [ -d "$OOBE_SRC" ]; then
+    cp "$OOBE_SRC/ble_wifi_setup.py" "$OOBE_DST/"
+    cp "$OOBE_SRC/config.py"         "$OOBE_DST/"
+    cp "$OOBE_SRC/wifi_manager.py"   "$OOBE_DST/"
+    cp "$OOBE_SRC/gpio_handler.py"   "$OOBE_DST/"
+    cp "$OOBE_SRC/mode_selector.py"  "$OOBE_DST/"
+    chmod +x "$OOBE_DST/ble_wifi_setup.py"
+    cp "$SCRIPT_DIR/services/oobe-setup.service" /etc/systemd/system/oobe-setup.service
+    systemctl daemon-reload
+    systemctl enable oobe-setup.service
+    log "OOBE BLE setup deployed → $OOBE_DST"
+else
+    warn "OOBE source not found at $OOBE_SRC — skipping"
+fi
+
+step "Phase 10/11: Logic Service (ZMQ + FastAPI)"
+LOGIC_SRC="$SCRIPT_DIR/../src/logic_service"
+LOGIC_DST="/opt/logic_service"
+mkdir -p "$LOGIC_DST"
+if [ -d "$LOGIC_SRC" ]; then
+    cp -r "$LOGIC_SRC/main.py"    "$LOGIC_DST/"
+    cp -r "$LOGIC_SRC/database"   "$LOGIC_DST/"
+    cp -r "$LOGIC_SRC/schemas"    "$LOGIC_DST/"
+    cp -r "$LOGIC_SRC/services"   "$LOGIC_DST/"
+    # Always deploy .env.example (used by sync-config.py as template)
+    [ -f "$LOGIC_SRC/.env.example" ] && cp "$LOGIC_SRC/.env.example" "$LOGIC_DST/.env.example"
+    # Install .env: use source .env if present, otherwise keep existing or copy from .env.example
+    if [ -f "$LOGIC_SRC/.env" ]; then
+        cp "$LOGIC_SRC/.env" "$LOGIC_DST/.env"
+    elif [ ! -f "$LOGIC_DST/.env" ] && [ -f "$LOGIC_SRC/.env.example" ]; then
+        cp "$LOGIC_SRC/.env.example" "$LOGIC_DST/.env"
+        warn "Logic Service .env copied from .env.example — sync-config will fill SQS values"
+    fi
+    # Install Python deps into shared venv
+    if [ -d "$VENV_DIR" ]; then
+        "$VENV_DIR/bin/pip" install -q -r "$LOGIC_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    fi
+    cp "$SCRIPT_DIR/services/logic-service.service" /etc/systemd/system/logic-service.service
+    systemctl daemon-reload
+    systemctl enable logic-service.service
+    log "Logic Service deployed → $LOGIC_DST"
+else
+    warn "Logic Service source not found at $LOGIC_SRC — skipping"
+fi
+
+step "Phase 11/11: AI Core detection pipeline"
+AI_SRC="$SCRIPT_DIR/../src/ai_core"
+AI_DST="/opt/ai_core"
+mkdir -p "$AI_DST"
+if [ -d "$AI_SRC" ]; then
+    cp "$AI_SRC/main.py" "$AI_DST/"
+    cp -r "$AI_SRC/src"  "$AI_DST/"
+    # Config files
+    for f in botsort_no_reid.yaml botsort_reid.yaml; do
+        [ -f "$AI_SRC/$f" ] && cp "$AI_SRC/$f" "$AI_DST/"
+    done
+    # Engine models (copy only if present — large files)
+    for f in "$AI_SRC"/*.engine; do
+        [ -f "$f" ] && cp "$f" "$AI_DST/"
+    done
+    # .env: always deploy .env.example; keep existing .env or create from example
+    [ -f "$AI_SRC/.env.example" ] && cp "$AI_SRC/.env.example" "$AI_DST/.env.example"
+    if [ -f "$AI_SRC/.env" ]; then
+        cp "$AI_SRC/.env" "$AI_DST/.env"
+    elif [ ! -f "$AI_DST/.env" ] && [ -f "$AI_SRC/.env.example" ]; then
+        cp "$AI_SRC/.env.example" "$AI_DST/.env"
+        warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
+    fi
+    cp "$SCRIPT_DIR/services/ai-core.service" /etc/systemd/system/ai-core.service
+    systemctl daemon-reload
+    systemctl enable ai-core.service
+    log "AI Core deployed → $AI_DST"
+else
+    warn "AI Core source not found at $AI_SRC — skipping"
+fi
+
 echo ""
 echo "  Storage:"
 echo "    Data dir:    $DATA_DIR"
@@ -320,10 +409,13 @@ echo "    person-count-ws → sudo systemctl status person-count-ws"
 echo "    stream-auth     → sudo systemctl status stream-auth"
 echo "    cloudflared     → sudo systemctl status cloudflared"
 echo "    nginx           → sudo systemctl status nginx"
+echo "    oobe-setup      → sudo systemctl status oobe-setup"
 echo "    audio-auto      → systemctl --user status audio-autostart"
 echo "    sync-config     → crontab -l (every 5 min)"
 echo "    device-update   → crontab -l (every 5 min)"
 echo "    update-server   → sudo systemctl status device-update-server"
+echo "    logic-service   → sudo systemctl status logic-service"
+echo "    ai-core         → sudo systemctl status ai-core"
 echo "    sim7600-4g      → sudo systemctl status sim7600-4g"
 echo "    net-watchdog    → sudo systemctl status network-watchdog"
 echo ""

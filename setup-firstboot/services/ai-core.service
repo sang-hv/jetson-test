@@ -1,0 +1,25 @@
+[Unit]
+Description=AI Core Detection Pipeline
+After=network.target camera-stream.service
+Wants=camera-stream.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+WorkingDirectory=/opt/ai_core
+ExecStart=/data/venv/mini-pc/bin/python main.py --device cuda
+
+Restart=always
+RestartSec=10
+
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY_ENABLED=false
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-core
+
+[Install]
+WantedBy=multi-user.target
