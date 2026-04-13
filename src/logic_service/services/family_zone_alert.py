@@ -19,7 +19,7 @@ from datetime import datetime, time, timezone
 import aiosqlite
 from cachetools import TTLCache
 
-from schemas.event_models import (
+from schemas.family_models import (
     AnimalAlertPayload,
     CrossingDetection,
     CrossingEventPayload,
@@ -138,7 +138,6 @@ async def _send_sqs_for_rule(
     send_detection_to_sqs(
         rule_code=rule_code,
         member_id=member_id,
-        camera_id=rule.get("camera_id", ""),
         detected_at=detected_at,
         detection_image_url=detection_image_url,
         confidence=confidence,

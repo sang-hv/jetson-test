@@ -427,13 +427,47 @@ sudo python3 /opt/oobe-setup/ble_wifi_setup.py --force
 ```
 /opt/oobe-setup/
 ├── ble_wifi_setup.py      # Script BLE chính
-├── config.py              # Cấu hình
-├── wifi_manager.py        # Quản lý WiFi
+├── config.py              # Cấu hình (UUIDs, constants)
+├── wifi_manager.py        # Quản lý WiFi (scan, connect)
 ├── gpio_handler.py        # Xử lý GPIO
 ├── requirements.txt       # Python dependencies
 └── systemd/
     └── oobe-setup.service # Systemd service file
 ```
+
+## Tính năng WiFi Scan (Mới)
+
+Từ phiên bản 1.1.0, hệ thống hỗ trợ scan danh sách mạng WiFi từ Jetson:
+
+### Flow hoạt động mới:
+1. Web App kết nối BLE với Jetson
+2. User nhấn "Quét mạng WiFi" trên Web App
+3. Jetson scan và gửi danh sách mạng về Web App
+4. User chọn mạng từ danh sách, nhập password
+5. Jetson kết nối WiFi và thông báo kết quả
+
+### BLE Characteristics mới:
+| UUID | Tên | Chức năng |
+|------|-----|-----------|
+| `...def4` | WiFi Scan | Write: Gửi lệnh scan (1=start) |
+| `...def5` | WiFi List | Read/Notify: Danh sách mạng (JSON) |
+
+### Format WiFi List (JSON):
+```json
+{
+  "status": 2,
+  "networks": [
+    {"ssid": "MyWiFi", "signal": 85, "security": "WPA2"},
+    {"ssid": "Office", "signal": 72, "security": "WPA3"}
+  ]
+}
+```
+
+### Status codes:
+- 0: IDLE (chưa scan)
+- 1: SCANNING (đang scan)
+- 2: COMPLETED (scan xong)
+- 3: ERROR (lỗi)
 
 ---
 
@@ -446,5 +480,11 @@ Nếu gặp vấn đề, vui lòng:
 
 ---
 
-**Phiên bản**: 1.0.0  
+**Phiên bản**: 1.1.0  
 **Cập nhật**: Tháng 1, 2026
+
+### Changelog v1.1.0:
+- Thêm tính năng scan danh sách WiFi từ Jetson
+- Web App hiển thị danh sách mạng WiFi để user chọn
+- Fix BLE name prefix mismatch (tên quảng cáo bị cắt ngắn)
+- Sửa lỗi DBUS environment variable trong systemd service

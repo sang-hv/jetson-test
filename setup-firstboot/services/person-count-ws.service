@@ -9,6 +9,8 @@ WorkingDirectory=/opt/person_count_ws
 ExecStart=/bin/bash /opt/person_count_ws/start.sh
 Restart=always
 RestartSec=5
+# Kill quickly on restart — ZMQ cleanup can hang
+TimeoutStopSec=5
 
 Environment=PYTHONUNBUFFERED=1
 # Same default as logic_service ZMQ_SUB_ADDRESS

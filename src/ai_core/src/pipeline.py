@@ -53,7 +53,7 @@ class Config:
     cam_fps: int = 30
 
     # Model configuration (adjusted based on device)
-    yolo_model: str = "yolo11n.pt"
+    yolo_model: str = "yolo11l.engine"
     insightface_model: str = "buffalo_l"
     det_size: Tuple[int, int] = field(default=(640, 640))
 
@@ -69,6 +69,12 @@ class Config:
     ppe_detection_enabled: bool = False
     ppe_confidence_threshold: float = 0.5
     ppe_model_path: str = "yolov8m-protective-equipment-detection.pt"
+
+    # PPE violation alert settings (enterprise pipeline only, loaded from .env)
+    ppe_violation_alert_enabled: bool = False
+    ppe_violation_alert_mask: bool = True
+    ppe_violation_alert_helmet: bool = True
+    ppe_violation_alert_glove: bool = True
 
     # People counting (line crossing) settings
     # Line + in_direction_point loaded from DB (detection_zones, code='entry_exit')
@@ -96,18 +102,26 @@ class Config:
     # Tracker type (loaded from .env): "bytetrack", "botsort", "botsort_reid"
     tracker_type: str = "bytetrack"
 
-    # Video source type (loaded from .env): "opencv" or "zmq"
+    # Video source type (loaded from .env): "opencv", "zmq", or "shm"
     video_source_type: str = "opencv"
     zmq_video_endpoint: str = "ipc:///tmp/ai_frames.sock"
     zmq_recv_timeout_ms: int = 2000
+    # Shared-memory mmap file (raw BGR from start-stream.py; must match STREAM_SHM_PATH)
+    shm_video_name: str = "/dev/shm/mini_pc_ai_frames.bin"
 
     # Detection image saving directory
     detection_image_dir: str = "detection"
+    # Show OpenCV GUI window (set false for SSH/headless runtime)
+    display_enabled: bool = True
 
     # Detection zone: restrict YOLO inference to this rectangle (normalized coords)
     # Loaded from DB (detection_zones, code='detection')
     # None = use full frame
     detection_zone: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
+
+    # Restricted zone: persons entering this area trigger an alert (normalized coords)
+    # Loaded from DB (detection_zones, code='restricted')
+    restricted_zone: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
 
     # Pipeline type: "home" or "shop"
     pipeline_type: str = "home"
@@ -136,6 +150,12 @@ class Config:
         ppe_threshold = float(env_vars.get("PPE_CONFIDENCE_THRESHOLD", "0.5"))
         ppe_model = env_vars.get("PPE_MODEL_PATH", "yolov8m-protective-equipment-detection.pt")
 
+        # Parse PPE violation alert settings from .env (enterprise only)
+        ppe_violation_alert_enabled = env_vars.get("PPE_VIOLATION_ALERT_ENABLED", "false").lower() == "true"
+        ppe_violation_alert_mask = env_vars.get("PPE_VIOLATION_ALERT_MASK", "true").lower() == "true"
+        ppe_violation_alert_helmet = env_vars.get("PPE_VIOLATION_ALERT_HELMET", "true").lower() == "true"
+        ppe_violation_alert_glove = env_vars.get("PPE_VIOLATION_ALERT_GLOVE", "true").lower() == "true"
+
         # Parse counting settings from .env
         counting_enabled = env_vars.get("COUNTING_ENABLED", "false").lower() == "true"
         counting_line_start: Tuple[float, float] = (0.0, 0.5)
@@ -149,6 +169,7 @@ class Config:
         import sqlite3 as _sqlite3
         _db_path = env_vars.get("FACE_DB_PATH", "logic_service/logic_service.db")
         detection_zone: Optional[Tuple[float, float, float, float]] = None
+        restricted_zone: Optional[Tuple[float, float, float, float]] = None
 
         try:
             _conn = _sqlite3.connect(_db_path)
@@ -168,6 +189,22 @@ class Config:
                     print("Warning: detection zone needs 4 corner points")
             else:
                 print("[Config] No detection zone found in DB, using full frame")
+
+            # Load restricted zone (alert when person enters this area)
+            _res_row = _conn.execute(
+                "SELECT coordinates FROM detection_zones WHERE code = 'restricted' LIMIT 1"
+            ).fetchone()
+            if _res_row:
+                _coords = _json.loads(_res_row[0])
+                if len(_coords) >= 4:
+                    _xs = [float(pt["x"]) for pt in _coords]
+                    _ys = [float(pt["y"]) for pt in _coords]
+                    restricted_zone = (min(_xs), min(_ys), max(_xs), max(_ys))
+                    print(f"[Config] Restricted zone loaded: {restricted_zone}")
+                else:
+                    print("Warning: restricted zone needs 4 corner points")
+            else:
+                print("[Config] No restricted zone found in DB")
 
             # Load counting line (entry_exit zone)
             if counting_enabled:
@@ -211,9 +248,14 @@ class Config:
         video_source_type = env_vars.get("VIDEO_SOURCE_TYPE", "opencv").lower()
         zmq_video_endpoint = env_vars.get("ZMQ_VIDEO_ENDPOINT", "ipc:///tmp/ai_frames.sock")
         zmq_recv_timeout_ms = int(env_vars.get("ZMQ_RECV_TIMEOUT_MS", "2000"))
+        shm_video_name = env_vars.get(
+            "SHM_VIDEO_PATH",
+            env_vars.get("SHM_VIDEO_NAME", "/dev/shm/mini_pc_ai_frames.bin"),
+        )
 
         # Parse detection image directory from .env
         detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")
+        display_enabled = env_vars.get("DISPLAY_ENABLED", "true").lower() == "true"
 
         # Parse pipeline type from .env
         pipeline_type = env_vars.get("PIPELINE_TYPE", "home").lower()
@@ -239,6 +281,11 @@ class Config:
             ppe_detection_enabled=ppe_enabled,
             ppe_confidence_threshold=ppe_threshold,
             ppe_model_path=ppe_model,
+            # PPE violation alert from .env
+            ppe_violation_alert_enabled=ppe_violation_alert_enabled,
+            ppe_violation_alert_mask=ppe_violation_alert_mask,
+            ppe_violation_alert_helmet=ppe_violation_alert_helmet,
+            ppe_violation_alert_glove=ppe_violation_alert_glove,
             # Counting from .env
             counting_enabled=counting_enabled,
             counting_line_start=counting_line_start,
@@ -263,10 +310,13 @@ class Config:
             video_source_type=video_source_type,
             zmq_video_endpoint=zmq_video_endpoint,
             zmq_recv_timeout_ms=zmq_recv_timeout_ms,
+            shm_video_name=shm_video_name,
             # Detection image saving
             detection_image_dir=detection_image_dir,
+            display_enabled=display_enabled,
             # Detection zone from DB
             detection_zone=detection_zone,
+            restricted_zone=restricted_zone,
             # Pipeline type from .env
             pipeline_type=pipeline_type,
         )
@@ -292,8 +342,12 @@ class Config:
             raise ValueError(f"min_confirm_frames must be >= 1")
         if self.recognize_interval_ms < 0:
             raise ValueError(f"recognize_interval_ms must be >= 0")
-        if self.pipeline_type not in ("home", "shop"):
-            raise ValueError(f"pipeline_type must be 'home' or 'shop', got {self.pipeline_type}")
+        if self.pipeline_type not in ("home", "shop", "enterprise"):
+            raise ValueError(f"pipeline_type must be 'home', 'shop', or 'enterprise', got {self.pipeline_type}")
+        if self.video_source_type not in ("opencv", "zmq", "shm"):
+            raise ValueError(
+                f"video_source_type must be opencv, zmq, or shm, got {self.video_source_type}"
+            )
 
 
 def create_pipeline(config: Config):
@@ -301,6 +355,9 @@ def create_pipeline(config: Config):
     if config.pipeline_type == "shop":
         from .shop_pipeline import ShopPipeline
         return ShopPipeline(config)
+    elif config.pipeline_type == "enterprise":
+        from .enterprise_pipeline import EnterprisePipeline
+        return EnterprisePipeline(config)
     else:
         from .home_pipeline import HomePipeline
         return HomePipeline(config)

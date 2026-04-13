@@ -1,22 +1,29 @@
 [Unit]
 Description=Audio Backchannel Server for go2rtc
-After=network.target sound.target pulseaudio.service camera-stream.service
-# Restart backchannel when camera-stream restarts (camera-stream recreates echocancel_sink)
-BindsTo=camera-stream.service
+After=network.target sound.target pulseaudio.service
+# No BindsTo=camera-stream needed. Backchannel only needs echocancel_sink (PulseAudio).
+# camera-stream restart recreates echo cancel in its ExecStartPre; if backchannel's pacat
+# loses the old sink → BrokenPipeError → Restart=always → ExecStartPre checks/creates echo cancel.
+# Disable rate-limiting so systemd never stops restarting after repeated failures.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=__USER__
 Group=audio
 WorkingDirectory=/opt/backchannel
-# Avoid systemd rate-limiting preventing recovery when the audio pipeline
-# repeatedly fails and the service needs a restart.
-StartLimitIntervalSec=0
-# Safety net: ensure echocancel_sink exists before starting (in case camera-stream's ExecStartPre failed)
-ExecStartPre=/bin/bash -c 'U=$(id -u __USER__); export XDG_RUNTIME_DIR=/run/user/$U PULSE_SERVER=unix:/run/user/$U/pulse/native; /opt/audio/setup-audio-autostart.sh'
+# Safety net: only create echo cancel if missing. Do NOT run full setup-audio-autostart.sh
+# here — it unloads+reloads the module, which would break camera-stream's active pulsesrc connection.
+ExecStartPre=/bin/bash -c '\
+  U=$(id -u __USER__); \
+  export XDG_RUNTIME_DIR=/run/user/$U \
+         PULSE_SERVER=unix:/run/user/$U/pulse/native; \
+  pactl list short sinks 2>/dev/null | grep -q echocancel_sink \
+    || /opt/audio/setup-audio-autostart.sh'
 ExecStart=/bin/bash /opt/backchannel/start.sh
 Restart=always
 RestartSec=5
+TimeoutStopSec=5
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

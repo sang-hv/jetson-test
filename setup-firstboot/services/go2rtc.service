@@ -10,8 +10,12 @@ ExecStart=/usr/local/bin/go2rtc -config /etc/go2rtc/go2rtc.yaml
 Restart=always
 RestartSec=5
 
-# Protect from OOM killer — if memory runs out, kill camera-stream first, not go2rtc
-OOMScoreAdjust=-900
+# Hard memory limit — kill and restart if go2rtc leaks beyond 1.5GB
+MemoryMax=1536M
+MemorySwapMax=512M
+
+# Recycle periodically to prevent long-run memory leaks
+RuntimeMaxSec=2h
 
 # Logging
 StandardOutput=journal

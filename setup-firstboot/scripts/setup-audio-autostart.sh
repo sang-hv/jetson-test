@@ -120,9 +120,10 @@ if [ "$load_success" = false ]; then
     log "WARNING: Echo cancel failed to load (mic: $MIC_SOURCE, speaker: $SPEAKER_SINK)"
 else
     log "Echo cancel ready: echocancel_source / echocancel_sink"
-    # Fix volume: ensure mic capture is at 80% regardless of desktop UI slider
-    pactl set-source-volume echocancel_source 80% 2>/dev/null || true
-    pactl set-source-volume "$MIC_SOURCE" 80% 2>/dev/null || true
+    # Set initial volumes. These may be overridden by module-stream-restore when
+    # a client (pulsesrc) connects; camera-stream ExecStartPost re-applies after connect.
+    pactl set-source-volume "$MIC_SOURCE" 100% 2>/dev/null || true
+    pactl set-source-volume echocancel_source 100% 2>/dev/null || true
     pactl set-sink-volume echocancel_sink 80% 2>/dev/null || true
 fi
 

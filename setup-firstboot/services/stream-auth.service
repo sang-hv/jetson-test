@@ -1,0 +1,22 @@
+[Unit]
+Description=Stream Auth — Nginx auth_request token validator
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/stream_auth
+ExecStart=/usr/bin/python3 /opt/stream_auth/server.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=5
+
+Environment=PYTHONUNBUFFERED=1
+Environment=AUTH_DB_PATH=/data/mini-pc/db/logic_service.db
+Environment=DEVICE_ENV_PATH=/etc/device/device.env
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

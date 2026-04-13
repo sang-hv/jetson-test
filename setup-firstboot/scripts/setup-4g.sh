@@ -209,6 +209,13 @@ bring_up_interface() {
 main() {
     log "=== SIM7600G-H 4G Setup Start ==="
 
+    # Quick check: skip if no /dev/ttyUSB* exists (lsusb can false-positive
+    # on Qualcomm USB IDs even when modem is not properly connected)
+    if ! ls /dev/ttyUSB* &>/dev/null; then
+        log "No /dev/ttyUSB* found — no 4G modem available, skipping setup"
+        exit 0
+    fi
+
     wait_for_modem || exit 1
     ensure_modemmanager
 

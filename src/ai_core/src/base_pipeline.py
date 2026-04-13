@@ -8,7 +8,7 @@ domain-specific logic (counting, alerts, etc.) without duplicating the core loop
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -116,16 +116,26 @@ class BasePipeline:
                 print("[Pipeline] WARNING: PPE detection requested but model not loaded")
                 self.ppe_detector = None
 
-        # Initialize ZMQ publisher
+        # ZMQ publisher for broadcasting events to Logic Service
         from .zmq_publisher import ZMQPublisher
         self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
         self._prev_person_count: int = -1
+        # Mask alert cooldown: track_id -> last alert timestamp
+        self._mask_alert_last_notified: Dict[int, float] = {}
+        self._mask_alert_cooldown: float = 30.0  # seconds between repeated alerts per track
 
         # Initialize detection image saver
         from .detection_saver import DetectionImageSaver
         self.detection_saver = DetectionImageSaver(base_dir=config.detection_image_dir)
 
         self._frame_count = 0
+
+        # Per-frame detection results for GUI display (raw, not smoothed).
+        # Keyed by track_id. Populated each frame in main thread when detectors are enabled.
+        # Alerts and tracker still use confirmed state from TrackManager (unchanged).
+        self._frame_mask_status: Dict[int, Optional[bool]] = {}
+        self._frame_helmet_status: Dict[int, Optional[bool]] = {}
+        self._frame_glove_status: Dict[int, Optional[bool]] = {}
 
         # Load known faces database
         print("-" * 60)
@@ -164,6 +174,8 @@ class BasePipeline:
         print(f"Device: {config.device}")
         if config.video_source_type == "zmq":
             print(f"Source: ZMQ ({config.zmq_video_endpoint})")
+        elif config.video_source_type == "shm":
+            print(f"Source: SHM ({config.shm_video_name})")
         else:
             print(f"Source: {config.source}")
         print(f"Known faces: {config.known_dir}")
@@ -172,6 +184,7 @@ class BasePipeline:
         print(f"Age/Gender detection: {'Enabled' if config.age_gender_enabled else 'Disabled'}")
         print(f"PPE detection (helmet/glove): {'Enabled' if config.ppe_detection_enabled else 'Disabled'}")
         print(f"Detection zone: {'Active' if config.detection_zone else 'Full frame'}")
+        print(f"Display window: {'Enabled' if config.display_enabled else 'Disabled (headless)'}")
         print("-" * 60)
 
     # ------------------------------------------------------------------
@@ -228,6 +241,17 @@ class BasePipeline:
                 recv_timeout_ms=timeout,
             )
 
+        if self.config.video_source_type == "shm":
+            from .shm_video_source import SharedMemoryVideoSource
+
+            name = self.config.shm_video_name
+            timeout = self.config.zmq_recv_timeout_ms
+            print(f"[Pipeline] Opening SHM video source: {name} (timeout={timeout}ms)")
+            return SharedMemoryVideoSource(
+                shm_name=name,
+                recv_timeout_ms=timeout,
+            )
+
         source = self.config.source
 
         # Try to parse as camera index
@@ -262,14 +286,35 @@ class BasePipeline:
         person: TrackedPerson,
         padding: float = 0.1,
     ) -> Optional[np.ndarray]:
-        """Extract person region from frame with padding."""
-        crop = crop_with_padding(frame, person.bbox, padding=padding)
+        """Extract head/upper region from person bbox for face recognition.
 
-        # Skip if crop is too small for reliable face detection
-        if crop.shape[0] < 50 or crop.shape[1] < 30:
+        Takes top 35% of bbox height (head region) with padding and clamps to
+        frame boundaries. Clamping handles close-up persons whose head is
+        partially out of frame — the face region remains visible.
+        """
+        fh, fw = frame.shape[:2]
+        x1, y1, x2, y2 = person.bbox.astype(int)
+        w = x2 - x1
+        h = y2 - y1
+
+        # Estimate head region: top 35% of person bbox height
+        head_h = h * 0.35
+
+        # Padding: horizontal = 20% of person width, vertical = 30% of head height
+        pad_x = int(w * 0.20)
+        pad_y = int(head_h * 0.30)
+
+        # Crop coordinates — clamp to frame boundary
+        # Extending upward (y1 - pad_y) handles close-up where head starts at/above frame top
+        cx1 = max(0, x1 - pad_x)
+        cy1 = max(0, y1 - pad_y)
+        cx2 = min(fw, x2 + pad_x)
+        cy2 = min(fh, int(y1 + head_h + pad_y))
+
+        if cx2 - cx1 < 30 or cy2 - cy1 < 30:
             return None
 
-        return crop
+        return frame[cy1:cy2, cx1:cx2].copy()
 
     def _detect(
         self, frame: np.ndarray
@@ -330,13 +375,135 @@ class BasePipeline:
                     self.recognition_worker.submit(task)
                     self.track_manager.mark_recognition_submitted(track_id)
 
+    def _check_mask_alerts(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Send ZMQ mask_alert when a confirmed no-mask person is detected in ROI."""
+        if self.mask_detector is None or self.zmq_publisher is None:
+            return
+
+        now = time.time()
+        no_mask_detections = []
+
+        for person in tracked_persons:
+            tid = person.track_id
+            mask_status = self.track_manager.get_mask_status(tid)
+
+            # Only alert when mask status is confirmed False (not wearing mask)
+            if mask_status is not False:
+                continue
+
+            # Apply per-track cooldown to avoid message flooding
+            elapsed = now - self._mask_alert_last_notified.get(tid, 0.0)
+            if elapsed < self._mask_alert_cooldown:
+                continue
+
+            self._mask_alert_last_notified[tid] = now
+
+            label = self.track_manager.get_label(tid)
+            age, gender = self.track_manager.get_age_gender(tid)
+            track_info = self.track_manager.get_track_info(tid)
+            confidence = track_info.get("avg_score") if track_info else None
+
+            detection_result = self.detection_saver.save_frame_with_box(
+                frame, person.bbox, "mask_alert", tid, label
+            )
+
+            no_mask_detections.append({
+                "track_id": tid,
+                "person_id": label,
+                "age": age,
+                "gender": gender,
+                "confidence": confidence,
+                "detection_result": detection_result,
+            })
+
+        if no_mask_detections:
+            self.zmq_publisher.send_mask_alert({
+                "timestamp": now,
+                "detections": no_mask_detections,
+            })
+
+        # Purge stale cooldown entries for tracks no longer in frame
+        active_ids = {p.track_id for p in tracked_persons}
+        self._mask_alert_last_notified = {
+            tid: t for tid, t in self._mask_alert_last_notified.items()
+            if tid in active_ids
+        }
+
+    def _detect_mask_per_frame(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Run mask detection on each person crop in the main thread (per-frame).
+
+        Results are stored in _frame_mask_status for GUI display only.
+        Does NOT affect tracker smoothing or alert logic — those still use
+        confirmed_mask from TrackManager updated by RecognitionWorker.
+        """
+        if self.mask_detector is None or not self.mask_detector.is_enabled:
+            return
+
+        active_ids = set()
+        for person in tracked_persons:
+            tid = person.track_id
+            active_ids.add(tid)
+            crop = self._extract_person_crop(frame, person)
+            if crop is None:
+                self._frame_mask_status.pop(tid, None)
+                continue
+            prob = self.mask_detector.get_mask_probability(crop)
+            if prob is None:
+                self._frame_mask_status[tid] = None
+            else:
+                self._frame_mask_status[tid] = prob > 0.5
+
+        # Remove stale entries for tracks no longer in frame
+        self._frame_mask_status = {
+            tid: v for tid, v in self._frame_mask_status.items() if tid in active_ids
+        }
+
+    def _detect_ppe_per_frame(
+        self, tracked_persons: List[TrackedPerson], frame: np.ndarray
+    ) -> None:
+        """Run PPE (helmet/glove) detection on each person crop in the main thread (per-frame).
+
+        Results are stored in _frame_helmet_status / _frame_glove_status for GUI display only.
+        Does NOT affect tracker smoothing or alert logic — those still use
+        confirmed state from TrackManager updated by RecognitionWorker.
+        """
+        if self.ppe_detector is None or not self.ppe_detector.is_enabled:
+            return
+
+        active_ids = set()
+        for person in tracked_persons:
+            tid = person.track_id
+            active_ids.add(tid)
+            crop = self._extract_person_crop(frame, person)
+            if crop is None:
+                self._frame_helmet_status.pop(tid, None)
+                self._frame_glove_status.pop(tid, None)
+                continue
+            helmet_prob, glove_prob = self.ppe_detector.get_probabilities(crop)
+            self._frame_helmet_status[tid] = (helmet_prob > 0.5) if helmet_prob is not None else None
+            self._frame_glove_status[tid] = (glove_prob > 0.5) if glove_prob is not None else None
+
+        # Remove stale entries for tracks no longer in frame
+        self._frame_helmet_status = {
+            tid: v for tid, v in self._frame_helmet_status.items() if tid in active_ids
+        }
+        self._frame_glove_status = {
+            tid: v for tid, v in self._frame_glove_status.items() if tid in active_ids
+        }
+
     def _draw_person(self, frame: np.ndarray, person: TrackedPerson) -> np.ndarray:
         """Draw a single tracked person with all attributes."""
         label = self.track_manager.get_label(person.track_id)
-        mask_status = self.track_manager.get_mask_status(person.track_id)
+        tid = person.track_id
+        # Use per-frame results for display if available, else fall back to tracker
+        mask_status = self._frame_mask_status.get(tid, self.track_manager.get_mask_status(tid))
+        helmet_status = self._frame_helmet_status.get(tid, self.track_manager.get_helmet_status(tid))
+        glove_status = self._frame_glove_status.get(tid, self.track_manager.get_glove_status(tid))
         age, gender = self.track_manager.get_age_gender(person.track_id)
-        helmet_status = self.track_manager.get_helmet_status(person.track_id)
-        glove_status = self.track_manager.get_glove_status(person.track_id)
         return draw_tracked_person(
             frame, person, label,
             mask_status=mask_status,
@@ -356,7 +523,7 @@ class BasePipeline:
         frame = draw_info_overlay(frame, fps, current_person_count, queue_info)
 
         # Publish person count change via ZMQ
-        if current_person_count != self._prev_person_count:
+        if self.zmq_publisher is not None and current_person_count != self._prev_person_count:
             self.zmq_publisher.send_person_count({
                 "timestamp": time.time(),
                 "person_count": current_person_count,
@@ -376,8 +543,15 @@ class BasePipeline:
         # 2. Hook: post-detection processing (counting, alerts)
         self._on_detections(tracked_persons, tracked_animals, frame)
 
+        # 2b. Mask alert: notify logic service when someone in ROI is not wearing mask
+        self._check_mask_alerts(tracked_persons, frame)
+
         # 3. Submit recognition tasks to worker queue (non-blocking)
         self._submit_recognition_tasks(tracked_persons, frame)
+
+        # 3b. Run mask/PPE detection per-frame in main thread for immediate GUI display
+        self._detect_mask_per_frame(tracked_persons, frame)
+        self._detect_ppe_per_frame(tracked_persons, frame)
 
         # 4. Draw labels
         for person in tracked_persons:
@@ -409,10 +583,17 @@ class BasePipeline:
         cap = self._open_video_source()
 
         if not cap.isOpened():
-            self.recognition_worker.stop()
-            raise RuntimeError(f"Failed to open video source: {self.config.source}")
+            # SHM source may start before writer exists; read() handles auto-reconnect.
+            if self.config.video_source_type == "shm":
+                print("[Pipeline] SHM source not attached yet, waiting for writer...")
+            else:
+                self.recognition_worker.stop()
+                raise RuntimeError(f"Failed to open video source: {self.config.source}")
 
-        print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        if self.config.display_enabled:
+            print("\n[Pipeline] Running... Press 'q' to quit, 'r' to refresh database\n")
+        else:
+            print("\n[Pipeline] Running in headless mode (no OpenCV window)\n")
 
         frame_count = 0
         try:
@@ -420,8 +601,8 @@ class BasePipeline:
                 ret, frame = cap.read()
 
                 if not ret:
-                    # ZMQ source: False = timeout/reconnecting, keep waiting
-                    if self.config.video_source_type == "zmq":
+                    # ZMQ / SHM: False = timeout, keep waiting
+                    if self.config.video_source_type in ("zmq", "shm"):
                         continue
                     # Camera index: might be temporary, retry
                     if self.config.source.isdigit():
@@ -435,18 +616,19 @@ class BasePipeline:
                 # Process frame (detection in main thread, recognition in worker)
                 annotated_frame = self._process_frame(frame)
 
-                # Display
-                cv2.imshow("Face Recognition", annotated_frame)
+                if self.config.display_enabled:
+                    # Display
+                    cv2.imshow("Face Recognition", annotated_frame)
 
-                # Handle keyboard events
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
-                    print("[Pipeline] Quit requested")
-                    break
-                elif key == ord("r"):
-                    print("\n[Pipeline] Refreshing face database...")
-                    self._load_known_faces(force_refresh=True)
-                    print("[Pipeline] Database refreshed\n")
+                    # Handle keyboard events
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        print("[Pipeline] Quit requested")
+                        break
+                    elif key == ord("r"):
+                        print("\n[Pipeline] Refreshing face database...")
+                        self._load_known_faces(force_refresh=True)
+                        print("[Pipeline] Database refreshed\n")
 
         except KeyboardInterrupt:
             print("\n[Pipeline] Interrupted by user")
@@ -454,7 +636,8 @@ class BasePipeline:
         finally:
             self.recognition_worker.stop()
             cap.release()
-            cv2.destroyAllWindows()
+            if self.config.display_enabled:
+                cv2.destroyAllWindows()
             if self.zmq_publisher is not None:
                 self.zmq_publisher.close()
             print(f"[Pipeline] Stopped after {frame_count} frames")

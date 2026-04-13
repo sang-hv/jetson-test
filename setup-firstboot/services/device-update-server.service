@@ -1,0 +1,18 @@
+[Unit]
+Description=Device OTA Update Server
+After=network.target stream-auth.service
+Wants=stream-auth.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/device_update
+ExecStart=/usr/bin/python3 /opt/device_update/server.py --port 8092
+Environment=DEVICE_ENV_PATH=/etc/device/device.env
+Environment=UPDATE_SCRIPT=/opt/device/run-update.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

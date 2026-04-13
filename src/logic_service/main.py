@@ -12,7 +12,6 @@ so it never blocks the HTTP server.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from pathlib import Path
@@ -32,8 +31,12 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from database.connection import close_db, get_db, init_db
-from schemas.event_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
-from services.rule_engine import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
+from schemas.enterprise_models import EmployeeCrossingPayload, PPEViolationAlertPayload, RestrictedZoneAlertPayload
+from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
+from schemas.shop_models import ShopPersonEventPayload
+from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
+from services.shop_zone_alert import process_shop_zone_sqs_event
+from services.enterprise_zone_alert import process_employee_crossing_alert, process_restricted_alert, process_ppe_violation_alert
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,10 +50,31 @@ ZMQ_STRANGER_TOPIC = b"stranger_alert"
 ZMQ_PASSERBY_TOPIC = b"passerby_event"
 ZMQ_ANIMAL_TOPIC = b"animal_alert"
 ZMQ_PERSON_COUNT_TOPIC = b"person_count"
+
+# shop topics
+ZMQ_ZONE_ENTRY_TOPIC = b"zone_entry"
+ZMQ_ZONE_EXIT_TOPIC = b"zone_exit"
+
+# enterprise topics
+ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
+ZMQ_RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
+ZMQ_PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
+
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
 _zmq_task: asyncio.Task | None = None
 
+async def _get_camera_facility(db) -> str | None:
+    """
+    Read `camera_settings` with key='facility' (value='Family' or 'Store').
+    Table structure is: (key TEXT UNIQUE, value TEXT NOT NULL).
+    """
+    cursor = await db.execute(
+        "SELECT value FROM camera_settings WHERE key = ?",
+        ("facility",),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row is not None else None
 
 async def _zmq_subscriber_loop() -> None:
     """
@@ -67,7 +91,18 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PASSERBY_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ANIMAL_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PERSON_COUNT_TOPIC)
-    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics=[{ZMQ_TOPIC.decode()}, {ZMQ_STRANGER_TOPIC.decode()}, {ZMQ_PASSERBY_TOPIC.decode()}, {ZMQ_ANIMAL_TOPIC.decode()}, {ZMQ_PERSON_COUNT_TOPIC.decode()}]")
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_ENTRY_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_ZONE_EXIT_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PPE_VIOLATION_ALERT_TOPIC)
+    all_topics = [
+        ZMQ_TOPIC, ZMQ_STRANGER_TOPIC, ZMQ_PASSERBY_TOPIC,
+        ZMQ_ANIMAL_TOPIC, ZMQ_PERSON_COUNT_TOPIC,
+        ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC,
+        ZMQ_EMPLOYEE_CROSSING_TOPIC, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC,
+    ]
+    logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics={[t.decode() for t in all_topics]}")
 
     try:
         while True:
@@ -79,26 +114,68 @@ async def _zmq_subscriber_loop() -> None:
                 topic = parts[0]
                 raw = parts[1].decode("utf-8")
                 db = get_db()
-                if topic == ZMQ_TOPIC:
-                    payload = CrossingEventPayload.model_validate_json(raw)
-                    result = await process_event(payload, db)
-                elif topic == ZMQ_STRANGER_TOPIC:
-                    payload = StrangerAlertPayload.model_validate_json(raw)
-                    result = await process_stranger_alert(payload, db)
-                elif topic == ZMQ_PASSERBY_TOPIC:
-                    payload = PasserbyEventPayload.model_validate_json(raw)
-                    result = await process_passerby_event(payload, db)
-                elif topic == ZMQ_ANIMAL_TOPIC:
-                    payload = AnimalAlertPayload.model_validate_json(raw)
-                    result = await process_animal_alert(payload, db)
-                elif topic == ZMQ_PERSON_COUNT_TOPIC:
-                    data = json.loads(raw)
-                    logger.info(f"Person count changed: {data.get('person_count')}")
-                    continue
+
+                # Decide which pipeline to run based on sqlite camera_settings.
+                facility = await _get_camera_facility(db)
+                handled = False
+                result = None
+
+                if facility == "Family":
+                    if topic == ZMQ_TOPIC:
+                        payload = CrossingEventPayload.model_validate_json(raw)
+                        result = await process_event(payload, db)
+                        handled = True
+                    elif topic == ZMQ_STRANGER_TOPIC:
+                        payload = StrangerAlertPayload.model_validate_json(raw)
+                        result = await process_stranger_alert(payload, db)
+                        handled = True
+                    elif topic == ZMQ_PASSERBY_TOPIC:
+                        payload = PasserbyEventPayload.model_validate_json(raw)
+                        result = await process_passerby_event(payload, db)
+                        handled = True
+                    elif topic == ZMQ_ANIMAL_TOPIC:
+                        payload = AnimalAlertPayload.model_validate_json(raw)
+                        result = await process_animal_alert(payload, db)
+                        handled = True
+                    elif topic in (ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC):
+                        # Store-only topics — ignore for Family cameras.
+                        handled = False
+                    else:
+                        logger.warning(f"Unknown ZMQ topic: {topic}")
+                        continue
+                elif facility == "Store":
+                    if topic in (ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC):
+                        payload = ShopPersonEventPayload.model_validate_json(raw)
+                        position = "in" if topic == ZMQ_ZONE_ENTRY_TOPIC else "out"
+                        result = await process_shop_zone_sqs_event(payload, position)
+                        handled = True
+                    else:
+                        # Family-only topics — ignore for Store cameras.
+                        handled = False
+                elif facility == "Enterprise":
+                    if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
+                        payload = EmployeeCrossingPayload.model_validate_json(raw)
+                        await process_employee_crossing_alert(payload)
+                        handled = True
+                    elif topic == ZMQ_RESTRICTED_ZONE_ALERT_TOPIC:
+                        payload = RestrictedZoneAlertPayload.model_validate_json(raw)
+                        await process_restricted_alert(payload)
+                        handled = True
+                    elif topic == ZMQ_PPE_VIOLATION_ALERT_TOPIC:
+                        payload = PPEViolationAlertPayload.model_validate_json(raw)
+                        await process_ppe_violation_alert(payload)
+                        handled = True
+                    else:
+                        handled = False
                 else:
-                    logger.warning(f"Unknown ZMQ topic: {topic}")
+                    # Only run Family/Store/Enterprise pipelines as requested.
+                    logger.warning(
+                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise' (got {facility!r}) — skipping"
+                    )
                     continue
-                logger.debug(f"ZMQ event processed: {result}")
+
+                if handled:
+                    logger.debug(f"ZMQ event processed: {result}")
             except ValidationError as exc:
                 logger.warning(f"Invalid ZMQ payload: {exc}")
             except asyncio.CancelledError:

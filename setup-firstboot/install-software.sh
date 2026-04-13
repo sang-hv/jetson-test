@@ -24,12 +24,24 @@ err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
 step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
 
 if [ "$EUID" -ne 0 ]; then
-    err "Cần chạy với sudo/root"
+    err "It needs to be run with sudo/root"
     exit 1
 fi
 
-step "Phase 1/7: System packages"
+step "Phase 1/8: System packages"
 apt-get update -qq 2>&1 | tail -1 | tee -a "$LOG_FILE"
+
+# Hold all NVIDIA/L4T packages BEFORE upgrade to prevent them from being
+# upgraded to incompatible versions that break the camera pipeline.
+L4T_HOLD_EARLY=(
+    nvidia-l4t-multimedia nvidia-l4t-gstreamer nvidia-l4t-camera
+    nvidia-l4t-core nvidia-l4t-cuda nvidia-l4t-nvsci
+    nvidia-l4t-multimedia-utils nvidia-l4t-init nvidia-l4t-3d-core
+    nvidia-l4t-firmware
+)
+apt-mark hold "${L4T_HOLD_EARLY[@]}" 2>/dev/null || true
+log "NVIDIA L4T packages held before upgrade"
+
 apt-get upgrade -y -qq 2>&1 | tail -3 | tee -a "$LOG_FILE"
 
 apt-get install -y -qq \
@@ -58,7 +70,13 @@ apt-get install -y -qq \
     2>&1 | tail -8 | tee -a "$LOG_FILE"
 log "Base software packages installed"
 
-step "Phase 2/7: Storage and directories"
+# Remove unnecessary services that waste CPU/RAM on edge devices
+apt-get remove -y -qq tracker-miner-fs apport 2>&1 | tail -3 | tee -a "$LOG_FILE" || true
+# NOTE: apt autoremove is deferred to AFTER nvidia packages are held (Phase 5.5)
+# Running it here would remove nvidia-l4t-* packages before they are protected.
+log "Removed tracker-miner-fs (file indexer) and apport (crash reporter)"
+
+step "Phase 2/8: Storage and directories"
 if [ -d /data ]; then
     DATA_DIR="/data/mini-pc"
     VENV_DIR="/data/venv/mini-pc"
@@ -75,7 +93,7 @@ fi
 log "Data dir: $DATA_DIR"
 log "Venv dir: $VENV_DIR"
 
-step "Phase 3/7: Swap and performance"
+step "Phase 3/8: Swap and performance"
 if [ ! -f /swapfile ]; then
     log "Creating 8GB swap file..."
     fallocate -l 8G /swapfile
@@ -93,7 +111,7 @@ jetson_clocks 2>/dev/null && log "jetson_clocks enabled" || warn "jetson_clocks 
 usermod -aG video,audio,docker,i2c,dialout "$ACTUAL_USER" 2>/dev/null || true
 log "User $ACTUAL_USER added to required groups"
 
-step "Phase 4/7: Python environment"
+step "Phase 4/8: Python environment"
 pip3 install jetson-stats 2>&1 | tail -1 | tee -a "$LOG_FILE" || warn "jetson-stats install failed"
 sudo -u "$ACTUAL_USER" python3 -m venv "$VENV_DIR" 2>/dev/null || true
 if [ -f "$VENV_DIR/bin/pip" ]; then
@@ -103,7 +121,72 @@ else
     warn "Python venv creation failed"
 fi
 
-step "Phase 5/7: GStreamer validation"
+step "Phase 5/8: AI / TensorRT packages"
+# Pin TensorRT to 10.3.0 — .engine files are NOT compatible across major versions.
+# Upgrading TensorRT requires re-exporting all models (10-20 min per model on Jetson).
+TRT_VERSION="10.3.0.30-1+cuda12.5"
+TRT_PACKAGES=(
+    "tensorrt=${TRT_VERSION}"
+    "libnvinfer10=${TRT_VERSION}"
+    "libnvinfer-dev=${TRT_VERSION}"
+    "libnvinfer-bin=${TRT_VERSION}"
+    "libnvinfer-plugin10=${TRT_VERSION}"
+    "libnvinfer-plugin-dev=${TRT_VERSION}"
+    "libnvinfer-dispatch10=${TRT_VERSION}"
+    "libnvinfer-dispatch-dev=${TRT_VERSION}"
+    "libnvinfer-lean10=${TRT_VERSION}"
+    "libnvinfer-lean-dev=${TRT_VERSION}"
+    "libnvinfer-vc-plugin10=${TRT_VERSION}"
+    "libnvinfer-vc-plugin-dev=${TRT_VERSION}"
+    "libnvinfer-headers-dev=${TRT_VERSION}"
+    "libnvinfer-headers-plugin-dev=${TRT_VERSION}"
+    "libnvinfer-samples=${TRT_VERSION}"
+    "libnvonnxparsers10=${TRT_VERSION}"
+    "libnvonnxparsers-dev=${TRT_VERSION}"
+    "python3-libnvinfer=${TRT_VERSION}"
+    "python3-libnvinfer-dev=${TRT_VERSION}"
+    "python3-libnvinfer-dispatch=${TRT_VERSION}"
+    "python3-libnvinfer-lean=${TRT_VERSION}"
+)
+HOLD_PACKAGES=(
+    tensorrt
+    libnvinfer10 libnvinfer-dev libnvinfer-bin
+    libnvinfer-plugin10 libnvinfer-plugin-dev
+    libnvinfer-dispatch10 libnvinfer-dispatch-dev
+    libnvinfer-lean10 libnvinfer-lean-dev
+    libnvinfer-vc-plugin10 libnvinfer-vc-plugin-dev
+    libnvinfer-headers-dev libnvinfer-headers-plugin-dev
+    libnvinfer-samples
+    libnvonnxparsers10 libnvonnxparsers-dev
+    python3-libnvinfer python3-libnvinfer-dev
+    python3-libnvinfer-dispatch python3-libnvinfer-lean
+    # L4T packages — apt autoremove will remove these and kill the camera pipeline
+    nvidia-l4t-multimedia
+    nvidia-l4t-gstreamer
+    nvidia-l4t-camera
+    nvidia-l4t-core
+    nvidia-l4t-cuda
+    nvidia-l4t-nvsci
+    nvidia-l4t-multimedia-utils
+    nvidia-l4t-init
+    nvidia-l4t-3d-core
+    nvidia-l4t-firmware
+)
+
+apt-get install -y -qq --allow-downgrades "${TRT_PACKAGES[@]}" nvidia-l4t-multimedia \
+    2>&1 | tail -5 | tee -a "$LOG_FILE" || warn "TensorRT install failed"
+log "TensorRT ${TRT_VERSION} installed"
+
+apt-mark hold "${HOLD_PACKAGES[@]}" 2>&1 | tee -a "$LOG_FILE"
+log "TensorRT + NVIDIA packages held (use 'apt-mark unhold' to release)"
+
+# WARNING: Do NOT run apt autoremove on Jetson.
+# apt-mark hold only protects held packages, NOT their dependencies.
+# autoremove will remove libprotobuf-lite23, libavutil56, libswresample3, etc.
+# which are indirect deps of nvargus-daemon and gstreamer1.0-libav.
+# This kills the camera pipeline (Argus socket crash + black stream).
+
+step "Phase 6/8: GStreamer validation"
 for pkg_name in libopenal-data libzvbi-common; do
     installed_ver=$(dpkg-query -W -f='${Version}' "$pkg_name" 2>/dev/null || echo "")
     if echo "$installed_ver" | grep -q "sav0"; then
@@ -120,7 +203,34 @@ for plugin in h264parse voaacenc mpegtsmux jpegdec x264enc; do
     fi
 done
 
-step "Phase 6/7: go2rtc"
+# Fix NVIDIA CSI camera: nvarguscamerasrc needs both standard libjpeg (jpeg_set_defaults)
+# and NVIDIA's libnvjpeg (jpeg_set_hardware_acceleration_parameters_enc).
+# Without preload, apt autoremove can break the link and kill the camera pipeline.
+PRELOAD_FILE="/etc/ld.so.preload"
+PRELOAD_LIBS=(
+    "/lib/aarch64-linux-gnu/libjpeg.so.8"
+    "/usr/lib/aarch64-linux-gnu/nvidia/libnvjpeg.so"
+)
+if [ ! -f "/lib/aarch64-linux-gnu/libjpeg.so.8" ]; then
+    log "Installing libjpeg-turbo8..."
+    apt-get install -y -qq libjpeg-turbo8 2>&1 | tail -1 | tee -a "$LOG_FILE"
+fi
+if [ ! -f "/usr/lib/aarch64-linux-gnu/nvidia/libnvjpeg.so" ]; then
+    log "Installing nvidia-l4t-multimedia..."
+    apt-get install -y -qq nvidia-l4t-multimedia 2>&1 | tail -1 | tee -a "$LOG_FILE"
+fi
+for lib in "${PRELOAD_LIBS[@]}"; do
+    if [ ! -f "$lib" ]; then
+        warn "Missing $lib after install — nvarguscamerasrc (CSI camera) may not work"
+        continue
+    fi
+    if ! grep -qF "$lib" "$PRELOAD_FILE" 2>/dev/null; then
+        echo "$lib" | tee -a "$PRELOAD_FILE" >/dev/null
+        log "Added to ld.so.preload: $lib"
+    fi
+done
+
+step "Phase 7/8: go2rtc"
 if [ -f /usr/local/bin/go2rtc ]; then
     log "go2rtc already installed"
 else
@@ -132,7 +242,7 @@ else
     log "go2rtc installed"
 fi
 
-step "Phase 7/7: cloudflared and ModemManager"
+step "Phase 8/8: cloudflared and ModemManager"
 if [ -f /usr/local/bin/cloudflared ]; then
     log "Cloudflared already installed: $(cloudflared --version 2>&1 | head -1)"
 else

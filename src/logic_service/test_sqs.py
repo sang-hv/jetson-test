@@ -58,7 +58,6 @@ test_timestamp = time.time()
 result = send_detection_to_sqs(
     rule_code="home_return_count",
     member_id="test_member_001",
-    camera_id="test_camera_001",
     detected_at=test_timestamp,
     detection_image_url="https://example.com/test_image.jpg",
     confidence=0.95,
@@ -69,7 +68,6 @@ if result:
     print(f"\n✅ SQS message sent successfully!")
     print(f"   rule_code:    home_return_count")
     print(f"   member_id:    test_member_001")
-    print(f"   camera_id:    test_camera_001")
     print(f"   timestamp:    {test_timestamp}")
 else:
     print(f"\n❌ Failed to send SQS message. Check logs above for details.")

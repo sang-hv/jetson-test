@@ -2,6 +2,11 @@
 ###############################################################################
 # setup-services.sh
 # Phase 2: Deploy files, configure services, and install cron jobs.
+#
+# Usage:
+#   sudo ./setup-services.sh                          # Deploy + enable all services
+#   sudo ./setup-services.sh --restart-all             # Deploy + enable + restart ALL services
+#   sudo ./setup-services.sh network-watchdog go2rtc   # Deploy + enable + restart specific services
 ###############################################################################
 
 set -euo pipefail
@@ -24,8 +29,80 @@ err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
 step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
 
 if [ "$EUID" -ne 0 ]; then
-    err "Cần chạy với sudo/root"
+    err "It needs to be run with sudo/root"
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Restart mode: no args = restart all, <name> = restart one service
+# ---------------------------------------------------------------------------
+SERVICES_DIR="$SCRIPT_DIR/services"
+
+# Build list of valid service names from the services/ directory
+get_valid_services() {
+    local f name
+    for f in "$SERVICES_DIR"/*.service; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .service)
+        echo "$name"
+    done
+}
+
+restart_service() {
+    local name="$1"
+    # Skip oneshot services — they run on boot or via timers, not via restart
+    case "$name" in
+        sim7600-4g)
+            log "Skipping $name (oneshot — runs on boot only)"
+            return 0
+            ;;
+        cleanup-detections)
+            log "Skipping $name (oneshot — managed by cleanup-detections.timer)"
+            return 0
+            ;;
+    esac
+    if [ "$name" = "audio-autostart" ]; then
+        # User-level service
+        log "Restarting $name (user service for $ACTUAL_USER)..."
+        su - "$ACTUAL_USER" -c \
+            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 \
+            && log "$name restarted" \
+            || err "Failed to restart $name"
+    else
+        log "Restarting $name..."
+        systemctl restart "$name.service" 2>&1 \
+            && log "$name restarted" \
+            || err "Failed to restart $name"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Determine restart mode (validate args BEFORE deploy to fail early)
+# ---------------------------------------------------------------------------
+RESTART_MODE="none"  # none | all | specific
+RESTART_TARGETS=()
+
+if [ "${1:-}" = "--restart-all" ]; then
+    RESTART_MODE="all"
+elif [ $# -gt 0 ]; then
+    RESTART_MODE="specific"
+    VALID_LIST=$(get_valid_services)
+    for TARGET in "$@"; do
+        FOUND=0
+        while IFS= read -r svc; do
+            if [ "$svc" = "$TARGET" ]; then
+                FOUND=1
+                break
+            fi
+        done <<< "$VALID_LIST"
+
+        if [ "$FOUND" -eq 0 ]; then
+            err "Unknown service '$TARGET'. Valid services:"
+            get_valid_services | sed 's/^/  - /'
+            exit 1
+        fi
+    done
+    RESTART_TARGETS=("$@")
 fi
 
 # Recompute data paths for deployment summary
@@ -37,7 +114,7 @@ else
     VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
-step "Phase 1/7: go2rtc stream services"
+step "Phase 1/8: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
 cp "$SCRIPT_DIR/scripts/start-stream.py" /opt/stream/start-stream.py
@@ -51,40 +128,65 @@ systemctl daemon-reload
 systemctl enable camera-stream.service go2rtc.service
 log "camera-stream + go2rtc configured"
 
-step "Phase 2/7: device identity and sync scripts"
+step "Phase 2/8: device identity and sync scripts"
 DEVICE_ID="${DEVICE_ID:-}"
 BACKEND_URL="${BACKEND_URL:-}"
 SECRET_KEY="${SECRET_KEY:-}"
+FORCE_DEVICE_ENV="${FORCE_DEVICE_ENV:-0}"
 
 mkdir -p /etc/device /opt/device
+mkdir -p /data/mini-pc/db
 
-if [ -f /etc/device/device.env ]; then
-    log "Device identity already configured"
+if [ "$FORCE_DEVICE_ENV" = "1" ]; then
+    if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
+        err "FORCE_DEVICE_ENV=1 but DEVICE_ID/BACKEND_URL/SECRET_KEY is empty"
+        exit 1
+    fi
+    cat > /etc/device/device.env << ENVEOF
+DEVICE_ID=$DEVICE_ID
+BACKEND_URL=$BACKEND_URL
+SECRET_KEY=$SECRET_KEY
+ENVEOF
+    log "Device identity written (forced) → /etc/device/device.env"
     source /etc/device/device.env
 else
-    if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
-        warn "Device identity not provided via env vars"
-        cat > /etc/device/device.env << 'ENVEOF'
+    if [ -f /etc/device/device.env ]; then
+        log "Device identity already configured"
+        source /etc/device/device.env
+    else
+        if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
+            warn "Device identity not provided via env vars"
+            cat > /etc/device/device.env << 'ENVEOF'
 # Device Identity — edit these values
 DEVICE_ID=
 BACKEND_URL=
 SECRET_KEY=
 ENVEOF
-    else
-        cat > /etc/device/device.env << ENVEOF
+        else
+            cat > /etc/device/device.env << ENVEOF
 DEVICE_ID=$DEVICE_ID
 BACKEND_URL=$BACKEND_URL
 SECRET_KEY=$SECRET_KEY
 ENVEOF
-        log "Device identity saved → /etc/device/device.env"
+            log "Device identity saved → /etc/device/device.env"
+        fi
     fi
 fi
 chmod 600 /etc/device/device.env
+chmod a+r /etc/device/device.env
+chmod -R 777 /data/mini-pc/db
 
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
-chmod +x /opt/device/sync-config.py /opt/device/device-update.py
-log "sync-config + device-update deployed"
+cp "$SCRIPT_DIR/scripts/cleanup-detections.sh" /opt/device/cleanup-detections.sh
+chmod +x /opt/device/sync-config.py /opt/device/device-update.py /opt/device/cleanup-detections.sh
+
+cp "$SCRIPT_DIR/services/cleanup-detections.service" /etc/systemd/system/cleanup-detections.service
+cp "$SCRIPT_DIR/services/cleanup-detections.timer" /etc/systemd/system/cleanup-detections.timer
+systemctl daemon-reload
+systemctl enable cleanup-detections.timer
+systemctl start cleanup-detections.timer
+log "sync-config + device-update + cleanup-detections deployed"
 
 SYNC_CRON_LINE="*/5 * * * * /usr/bin/python3 /opt/device/sync-config.py"
 if crontab -l 2>/dev/null | grep -q "sync-config.py"; then
@@ -110,15 +212,15 @@ if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     python3 /opt/device/device-update.py 2>&1 | tee -a "$LOG_FILE" || warn "First update device failed (cron will retry)"
 fi
 
-step "Phase 3/7: cloudflared service check"
+step "Phase 3/8: cloudflared service check"
 if systemctl is-active cloudflared >/dev/null 2>&1; then
     log "Cloudflared tunnel already running"
 else
     warn "Cloudflared installed — tunnel will be configured after sync-config runs"
 fi
 
-step "Phase 4/7: backchannel and person-count ws"
-mkdir -p /opt/backchannel /opt/person_count_ws
+step "Phase 4/8: backchannel, person-count ws, and stream-auth"
+mkdir -p /opt/backchannel /opt/person_count_ws /opt/stream_auth
 cp "$SCRIPT_DIR/backchannel/server.py" /opt/backchannel/server.py
 cp "$SCRIPT_DIR/backchannel/start.sh" /opt/backchannel/start.sh
 chmod +x /opt/backchannel/start.sh
@@ -127,17 +229,34 @@ cp "$SCRIPT_DIR/person_count_ws/server.py" /opt/person_count_ws/server.py
 cp "$SCRIPT_DIR/person_count_ws/start.sh" /opt/person_count_ws/start.sh
 chmod +x /opt/person_count_ws/start.sh
 
+cp "$SCRIPT_DIR/stream_auth/server.py" /opt/stream_auth/server.py
+
 pip3 install websockets pyzmq 2>&1 | tail -3 | tee -a "$LOG_FILE"
 
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
     > /etc/systemd/system/backchannel.service
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/person-count-ws.service" \
     > /etc/systemd/system/person-count-ws.service
+cp "$SCRIPT_DIR/services/stream-auth.service" /etc/systemd/system/stream-auth.service
 systemctl daemon-reload
-systemctl enable backchannel.service person-count-ws.service
-log "Backchannel + person-count ws configured"
+systemctl enable backchannel.service person-count-ws.service stream-auth.service
+log "Backchannel + person-count ws + stream-auth configured"
 
-step "Phase 5/7: nginx reverse proxy"
+step "Phase 5/8: device OTA update server"
+mkdir -p /opt/device_update
+cp "$SCRIPT_DIR/device_update/server.py" /opt/device_update/server.py
+cp "$SCRIPT_DIR/scripts/run-update.sh" /opt/device/run-update.sh
+chmod +x /opt/device/run-update.sh
+
+# Save repo path so run-update.sh and device-update.py can find the git repo
+echo "$SCRIPT_DIR" > /etc/device/repo-path
+
+cp "$SCRIPT_DIR/services/device-update-server.service" /etc/systemd/system/device-update-server.service
+systemctl daemon-reload
+systemctl enable device-update-server.service
+log "Device OTA update server configured"
+
+step "Phase 6/8: nginx reverse proxy"
 cp "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/go2rtc
 ln -sf /etc/nginx/sites-available/go2rtc /etc/nginx/sites-enabled/go2rtc
 rm -f /etc/nginx/sites-enabled/default
@@ -145,7 +264,7 @@ nginx -t 2>&1 | tee -a "$LOG_FILE"
 systemctl enable nginx
 log "Nginx configured"
 
-step "Phase 6/7: audio autostart"
+step "Phase 7/8: audio autostart"
 mkdir -p /opt/audio
 cp "$SCRIPT_DIR/scripts/setup-audio-autostart.sh" /opt/audio/setup-audio-autostart.sh
 chmod +x /opt/audio/setup-audio-autostart.sh
@@ -159,7 +278,7 @@ su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSIO
 loginctl enable-linger "$ACTUAL_USER"
 log "Audio autostart service enabled"
 
-step "Phase 7/7: SIM7600 scripts/services"
+step "Phase 8/8: SIM7600 scripts/services"
 mkdir -p /opt/4g
 cp "$SCRIPT_DIR/scripts/setup-4g.sh" /opt/4g/setup-4g.sh
 cp "$SCRIPT_DIR/scripts/network-watchdog.sh" /opt/4g/network-watchdog.sh
@@ -198,12 +317,38 @@ echo "  Services:"
 echo "    go2rtc          → sudo systemctl status go2rtc"
 echo "    backchannel     → sudo systemctl status backchannel"
 echo "    person-count-ws → sudo systemctl status person-count-ws"
+echo "    stream-auth     → sudo systemctl status stream-auth"
 echo "    cloudflared     → sudo systemctl status cloudflared"
 echo "    nginx           → sudo systemctl status nginx"
 echo "    audio-auto      → systemctl --user status audio-autostart"
 echo "    sync-config     → crontab -l (every 5 min)"
 echo "    device-update   → crontab -l (every 5 min)"
+echo "    update-server   → sudo systemctl status device-update-server"
 echo "    sim7600-4g      → sudo systemctl status sim7600-4g"
 echo "    net-watchdog    → sudo systemctl status network-watchdog"
 echo ""
 log "Phase 2 complete: files and services configured"
+
+# ---------------------------------------------------------------------------
+# Post-deploy: restart services if requested
+# ---------------------------------------------------------------------------
+if [ "$RESTART_MODE" = "all" ]; then
+    step "Restarting all services"
+    while IFS= read -r svc; do
+        restart_service "$svc"
+    done < <(get_valid_services)
+    for f in "$SERVICES_DIR"/*.timer; do
+        [ -f "$f" ] || continue
+        _timer=$(basename "$f")
+        log "Restarting timer $_timer..."
+        systemctl restart "$_timer" 2>&1 \
+            && log "$_timer restarted" \
+            || err "Failed to restart $_timer"
+    done
+    log "All services restarted"
+elif [ "$RESTART_MODE" = "specific" ]; then
+    step "Restarting requested services"
+    for TARGET in "${RESTART_TARGETS[@]}"; do
+        restart_service "$TARGET"
+    done
+fi

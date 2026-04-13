@@ -40,7 +40,7 @@ TimeoutStartSec=30
 
 # Environment variables
 Environment=PYTHONUNBUFFERED=1
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+# Lưu ý: Không cần DBUS_SESSION_BUS_ADDRESS vì script sử dụng SystemBus
 
 # Logging
 StandardOutput=journal

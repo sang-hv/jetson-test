@@ -4,18 +4,23 @@
 #
 #  Shares 1 CSI camera (IMX219) between:
 #    - Branch 1: H.264+AAC → MPEG-TS → stdout (go2rtc exec)
-#    - Branch 2: AI JPEG frames → ZMQ ipc:///tmp/ai_frames.sock
+#    - Branch 2: raw BGR → POSIX shared memory (ai_core, no JPEG/ZMQ)
 #
 #  Modes:
 #    exec    (default): fdsink fd=1 → go2rtc reads stdout
 #    service          : tcpserversink :8553 → nc reads TCP
 #
 #  go2rtc.yaml: exec:python3 /opt/stream/start-stream.py
+#
+#  SHM protocol (must match ai_core/src/shm_video_source.py):
+#    Header 64 bytes + double buffer (stride * height each slot)
 ###############################################################################
 
 import argparse
+import mmap
 import os
 import signal
+import struct
 import sys
 import threading
 import time
@@ -34,16 +39,125 @@ STREAM_FPS = 30
 STREAM_BITRATE = 2000  # kbps — reduced to save RAM
 TCP_PORT = 8553
 
-AI_WIDTH = 1920   # smaller = less memory, sufficient for detection
+AI_WIDTH = 1920
 AI_HEIGHT = 1080
-AI_MAX_FPS = 5   # 3fps is enough for AI detection
+AI_MAX_FPS = 5
 
-ZMQ_ENDPOINT = "ipc:///tmp/ai_frames.sock"
-JPEG_QUALITY = 100  # higher quality for photo capture
+# Shared memory backing file path.
+# Accept legacy STREAM_SHM_NAME (/mini_pc_ai_frames) and normalize to /dev/shm/<name>.bin
+_raw_shm_path = os.environ.get("STREAM_SHM_PATH", os.environ.get("STREAM_SHM_NAME", "/mini_pc_ai_frames"))
+if _raw_shm_path.startswith("/dev/shm/"):
+    SHM_PATH = _raw_shm_path
+else:
+    SHM_PATH = f"/dev/shm/{_raw_shm_path.lstrip('/')}.bin"
 
 # Health watchdog: if no frame produced for this many seconds, pipeline is stalled → exit
 HEALTH_TIMEOUT_SEC = 30
 WATCHDOG_NOTIFY = True  # notify systemd WatchdogSec
+
+HEADER_SIZE = 64
+MAGIC = b"MPAI"
+FORMAT_BGR = 0
+
+# ---------------------------------------------------------------------------
+# Shared memory writer (double buffer; protocol matches ai_core shm_video_source)
+# ---------------------------------------------------------------------------
+_shm = None
+_shm_fd = None
+_shm_lock = threading.Lock()
+_shm_active_slot = 0
+_shm_seq = 0
+
+
+def _unlink_shm_if_exists(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[stream] WARNING: could not remove old SHM file {path!r}: {e}", file=sys.stderr, flush=True)
+
+
+def init_shm_writer() -> bool:
+    """Create file-backed mmap segment for raw BGR frames."""
+    global _shm, _shm_fd
+
+    stride = AI_WIDTH * 3
+    slot_bytes = stride * AI_HEIGHT
+    total = HEADER_SIZE + 2 * slot_bytes
+
+    os.makedirs("/dev/shm", exist_ok=True)
+    _unlink_shm_if_exists(SHM_PATH)
+    try:
+        _shm_fd = os.open(SHM_PATH, os.O_CREAT | os.O_RDWR, 0o666)
+        os.ftruncate(_shm_fd, total)
+        _shm = mmap.mmap(_shm_fd, total, access=mmap.ACCESS_WRITE)
+    except Exception as e:
+        print(f"[stream] ERROR: SHM create failed: {e}", file=sys.stderr, flush=True)
+        return False
+
+    buf = _shm
+    buf[0:4] = MAGIC
+    struct.pack_into("<I", buf, 4, 1)  # version
+    struct.pack_into("<I", buf, 8, AI_WIDTH)
+    struct.pack_into("<I", buf, 12, AI_HEIGHT)
+    struct.pack_into("<I", buf, 16, stride)
+    struct.pack_into("<I", buf, 20, FORMAT_BGR)
+    struct.pack_into("<Q", buf, 24, 0)
+    struct.pack_into("<I", buf, 32, 0)
+
+    print(
+        f"[stream] SHM writer: {SHM_PATH} size={total} ({AI_WIDTH}x{AI_HEIGHT} BGR x2)",
+        file=sys.stderr,
+        flush=True,
+    )
+    return True
+
+
+def publish_frame_bgr(raw: bytes) -> None:
+    """Write one BGR frame into SHM (caller holds GStreamer thread; lock protects)."""
+    global _shm_active_slot, _shm_seq
+    if _shm is None:
+        return
+
+    stride = AI_WIDTH * 3
+    expected = stride * AI_HEIGHT
+    if len(raw) < expected:
+        return
+    if len(raw) != expected:
+        raw = raw[:expected]
+
+    inactive = 1 - _shm_active_slot
+    offset = HEADER_SIZE + inactive * expected
+
+    with _shm_lock:
+        _shm[offset : offset + expected] = raw
+        struct.pack_into("<I", _shm, 8, AI_WIDTH)
+        struct.pack_into("<I", _shm, 12, AI_HEIGHT)
+        struct.pack_into("<I", _shm, 16, stride)
+        struct.pack_into("<I", _shm, 32, inactive & 1)
+        _shm_seq += 1
+        struct.pack_into("<Q", _shm, 24, _shm_seq)
+        _shm_active_slot = inactive
+
+
+def close_shm_writer() -> None:
+    global _shm, _shm_fd
+    if _shm is not None:
+        try:
+            _shm.close()
+        except Exception:
+            pass
+        _shm = None
+    if _shm_fd is not None:
+        try:
+            os.close(_shm_fd)
+        except Exception:
+            pass
+        _shm_fd = None
+    _unlink_shm_if_exists(SHM_PATH)
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -110,56 +224,9 @@ def health_watchdog(pipeline, loop):
 
 
 # ---------------------------------------------------------------------------
-# ZMQ Publisher (lazy import — works without zmq for stream-only mode)
+# GStreamer appsink callback (raw BGR)
 # ---------------------------------------------------------------------------
-_zmq_socket = None
-_zmq_lock = threading.Lock()
-
-
-def init_zmq() -> bool:
-    """Initialize ZMQ publisher. Returns True if successful."""
-    global _zmq_socket
-    try:
-        import zmq
-
-        ctx = zmq.Context()
-        _zmq_socket = ctx.socket(zmq.PUB)
-        _zmq_socket.setsockopt(zmq.SNDHWM, 2)  # drop old frames
-        _zmq_socket.bind(ZMQ_ENDPOINT)
-        log(f"ZMQ publisher bound: {ZMQ_ENDPOINT}")
-        return True
-    except ImportError:
-        log("WARNING: zmq not installed — AI frame publishing disabled")
-        return False
-    except Exception as e:
-        log(f"WARNING: ZMQ init failed: {e}")
-        return False
-
-
-def publish_frame(jpeg_data: bytes, timestamp_ns: int) -> None:
-    """Publish a JPEG frame via ZMQ (non-blocking, drops if no subscriber)."""
-    if _zmq_socket is None:
-        return
-    try:
-        import struct
-
-        # Message format: [8-byte timestamp][jpeg bytes]
-        header = struct.pack("<Q", timestamp_ns)
-        _zmq_socket.send(header + jpeg_data, flags=1)  # NOBLOCK
-    except Exception:
-        pass  # silently drop if no subscriber or queue full
-
-
-# ---------------------------------------------------------------------------
-# GStreamer appsink callback
-# ---------------------------------------------------------------------------
-_last_ai_frame_time = 0.0
-
-
 def on_new_sample(sink) -> Gst.FlowReturn:
-    """Called when appsink has a new JPEG frame for AI (already rate-limited by videorate)."""
-    global _last_ai_frame_time
-
     sample = sink.emit("pull-sample")
     if sample is None:
         return Gst.FlowReturn.OK
@@ -169,11 +236,11 @@ def on_new_sample(sink) -> Gst.FlowReturn:
     if not ok:
         return Gst.FlowReturn.OK
 
-    jpeg_data = bytes(map_info.data)
+    raw = bytes(map_info.data)
     buf.unmap(map_info)
 
     touch_health()
-    publish_frame(jpeg_data, buf.pts)
+    publish_frame_bgr(raw)
 
     return Gst.FlowReturn.OK
 
@@ -185,7 +252,6 @@ def has_echocancel() -> bool:
     """Check if PulseAudio echocancel_source is available, with retries."""
     import subprocess
 
-    # Debug: show PulseAudio env
     log(f"  PulseAudio debug:")
     log(f"    UID: {os.getuid()}")
     log(f"    XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '<not set>')}")
@@ -219,7 +285,6 @@ def has_echocancel() -> bool:
 def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     """Build GStreamer pipeline with tee for stream + AI."""
 
-    # Video source (shared)
     video_src = (
         f"nvarguscamerasrc wbmode=1 ispdigitalgainrange=\"1 1\" ! "
         f"video/x-raw(memory:NVMM),width={STREAM_WIDTH},height={STREAM_HEIGHT},"
@@ -228,7 +293,6 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
         f"tee name=t"
     )
 
-    # Branch 1: Stream → fdsink (for go2rtc)
     stream_branch = (
         f"t. ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! "
         f"x264enc tune=zerolatency speed-preset=ultrafast "
@@ -237,13 +301,9 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
         f"queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! mux."
     )
 
-    # Audio (if available)
     if with_audio:
         audio_branch = (
-            # buffer-time/latency-time: read 100ms chunks to handle echocancel latency
-            # do-timestamp=true: use pipeline clock instead of PulseAudio timestamps
             "pulsesrc device=echocancel_source buffer-time=100000 latency-time=50000 do-timestamp=true ! "
-            # Use a real-time queue with 1-second buffer; leaky=downstream drops old audio, not new
             "queue leaky=downstream max-size-time=1000000000 max-size-buffers=0 max-size-bytes=0 ! "
             "audioconvert ! audioresample ! volume volume=8.0 ! "
             "voaacenc bitrate=128000 ! aacparse ! mux."
@@ -251,7 +311,6 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     else:
         audio_branch = ""
 
-    # Muxer → output (exec mode: stdout, service mode: TCP)
     if mode == "service":
         mux_out = (
             f"mpegtsmux name=mux alignment=7 ! "
@@ -261,15 +320,13 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
     else:
         mux_out = "mpegtsmux name=mux alignment=7 ! fdsink fd=1"
 
-    # Branch 2: AI → appsink (JPEG for ZMQ)
-    # videorate limits to AI_MAX_FPS BEFORE heavy processing (saves GPU memory)
+    # AI branch: raw BGR → appsink (no jpegenc / ZMQ)
     ai_branch = (
         f"t. ! queue leaky=downstream max-size-buffers=2 "
         f"max-size-bytes=0 max-size-time=0 ! "
         f"videorate ! video/x-raw,framerate={AI_MAX_FPS}/1 ! "
         f"videoscale ! video/x-raw,width={AI_WIDTH},height={AI_HEIGHT} ! "
-        f"videoconvert ! video/x-raw,format=RGB ! "
-        f"jpegenc quality={JPEG_QUALITY} ! "
+        f"videoconvert ! video/x-raw,format=BGR ! "
         f"appsink name=ai_sink emit-signals=true max-buffers=1 drop=true sync=false"
     )
 
@@ -279,7 +336,6 @@ def build_pipeline(with_audio: bool, mode: str = "exec") -> Gst.Pipeline:
 
     pipeline = Gst.parse_launch(pipeline_str)
 
-    # Connect appsink callback
     ai_sink = pipeline.get_by_name("ai_sink")
     if ai_sink:
         ai_sink.connect("new-sample", on_new_sample)
@@ -299,40 +355,32 @@ def main() -> int:
     Gst.init(None)
     log(f"Mode: {args.mode}")
 
-    # PulseAudio env — force-set using actual UID (%U in systemd resolves wrong)
     uid = os.getuid()
     os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
     os.environ["PULSE_SERVER"] = f"unix:/run/user/{uid}/pulse/native"
 
-    # Check audio
     with_audio = has_echocancel()
     if with_audio:
         log("Audio: echocancel_source ✓")
     else:
         log("No echocancel — video only")
 
-    # Init ZMQ for AI frames
-    zmq_ok = init_zmq()
-    if zmq_ok:
-        log(f"AI frames: ZMQ → {ZMQ_ENDPOINT} (max {AI_MAX_FPS}fps, {AI_WIDTH}x{AI_HEIGHT})")
-    else:
-        log("AI frames: disabled (stream only mode)")
+    if not init_shm_writer():
+        err("Failed to init SHM — exiting")
+        return 1
 
-    # Build and start pipeline
+    log(f"AI frames: SHM {SHM_PATH} (max {AI_MAX_FPS}fps, {AI_WIDTH}x{AI_HEIGHT} BGR)")
+
     pipeline = build_pipeline(with_audio, mode=args.mode)
     pipeline.set_state(Gst.State.PLAYING)
     log("Pipeline PLAYING")
 
-    # Notify systemd we're ready
     _sd_notify("READY=1")
 
-    # Start health watchdog thread
     touch_health()
 
-    # Main loop
     loop = GLib.MainLoop()
 
-    # Handle signals
     def on_signal(sig, frame):
         log(f"Signal {sig} received, stopping...")
         pipeline.set_state(Gst.State.NULL)
@@ -341,7 +389,6 @@ def main() -> int:
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
 
-    # Watch for errors
     bus = pipeline.get_bus()
     bus.add_signal_watch()
 
@@ -364,7 +411,6 @@ def main() -> int:
 
     bus.connect("message", on_bus_message)
 
-    # Health watchdog: auto-exit if pipeline stalls
     wd = threading.Thread(target=health_watchdog, args=(pipeline, loop), daemon=True)
     wd.start()
     log(f"Health watchdog started (timeout={HEALTH_TIMEOUT_SEC}s)")
@@ -375,6 +421,7 @@ def main() -> int:
         err(f"Main loop error: {e}")
     finally:
         pipeline.set_state(Gst.State.NULL)
+        close_shm_writer()
         log("Pipeline stopped")
 
     return 0

@@ -30,6 +30,22 @@ class ZMQPublisher:
     ANIMAL_ALERT_TOPIC = b"animal_alert"
     PERSON_COUNT_TOPIC = b"person_count"
 
+    # shop topics
+    ZONE_ENTRY_TOPIC = b"zone_entry"
+    ZONE_EXIT_TOPIC = b"zone_exit"
+
+    # enterprise topics
+    EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
+
+    # mask alert topic
+    MASK_ALERT_TOPIC = b"mask_alert"
+
+    # restricted zone alert topic
+    RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
+
+    # PPE violation alert topic (enterprise only)
+    PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
+
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
@@ -91,6 +107,67 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher person count send failed: {exc}")
+
+    def send_zone_entry(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the zone_entry topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.ZONE_ENTRY_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher zone entry send failed: {exc}")
+
+    def send_zone_exit(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the zone_exit topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.ZONE_EXIT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher zone exit send failed: {exc}")
+
+    def send_employee_crossing(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the employee_crossing topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.EMPLOYEE_CROSSING_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher employee crossing send failed: {exc}")
+
+    def send_restricted_zone_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the restricted_zone_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.RESTRICTED_ZONE_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher restricted zone alert send failed: {exc}")
+
+    def send_ppe_violation_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the ppe_violation_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.PPE_VIOLATION_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+            print(f"[ZMQ DEBUG] ppe_violation_alert sent: {data}")
+        except zmq.Again:
+            print("[ZMQ DEBUG] ppe_violation_alert DROPPED — no subscriber connected")
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher PPE violation alert send failed: {exc}")
+
+    def send_mask_alert(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the mask_alert topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.MASK_ALERT_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher mask alert send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""

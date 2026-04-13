@@ -199,12 +199,12 @@ class RecognitionWorker:
             threshold=self.threshold,
         )
 
-        # Run mask detection if enabled
+        # Run mask detection on full person crop — mask YOLO detects faces itself
         mask_probability = None
         if self.mask_detector is not None and self.mask_detector.is_enabled:
             mask_probability = self.mask_detector.get_mask_probability(task.crop)
 
-        # Run PPE detection if enabled (helmet/glove)
+        # Run PPE detection on full person crop (helmet/glove)
         helmet_probability = None
         glove_probability = None
         if self.ppe_detector is not None and self.ppe_detector.is_enabled:

@@ -4,3 +4,7 @@ data/
 *.pyo
 *.db*
 src/logic_service/.env
+.vscode/
+src/ai_core/.env
+.vscode/
+src/app.log
