@@ -501,11 +501,20 @@ else:
     log("No SQS config in API response — skipping logic_service .env")
 
 # ---------------------------------------------------------------------------
-# Sync PIPELINE_TYPE → /opt/ai_core/.env  &  restart ai-core when needed
+# Sync PIPELINE_TYPE → ai_core/.env  &  restart ai-core when needed
 # ---------------------------------------------------------------------------
-AI_ENV = Path("/opt/ai_core/.env")
-AI_ENV_EXAMPLE = Path("/opt/ai_core/.env.example")
-AI_ENV.parent.mkdir(parents=True, exist_ok=True)
+# ai_core lives inside the repo (sibling to setup-firstboot)
+_repo_path_file = Path("/etc/device/repo-path")
+if _repo_path_file.exists():
+    _repo_root = _repo_path_file.read_text().strip().rstrip("/")
+    # repo-path points to setup-firstboot/, parent is the repo root
+    _ai_core_dir = Path(_repo_root).parent / "src" / "ai_core"
+else:
+    _ai_core_dir = Path("/opt/ai_core")
+
+AI_ENV = _ai_core_dir / ".env"
+AI_ENV_EXAMPLE = _ai_core_dir / ".env.example"
+_ai_core_dir.mkdir(parents=True, exist_ok=True)
 
 # Map facility name → PIPELINE_TYPE value
 FACILITY_TO_PIPELINE = {

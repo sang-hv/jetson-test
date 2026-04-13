@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=root
 
-WorkingDirectory=/opt/ai_core
+WorkingDirectory=__AI_CORE_DIR__
 ExecStart=/data/venv/mini-pc/bin/python main.py --device cuda
 
 Restart=always

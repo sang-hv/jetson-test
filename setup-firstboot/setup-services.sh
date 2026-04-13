@@ -365,38 +365,25 @@ else
 fi
 
 step "Phase 11/11: AI Core detection pipeline"
-AI_SRC="$SCRIPT_DIR/../src/ai_core"
-AI_DST="/opt/ai_core"
-mkdir -p "$AI_DST"
+AI_SRC="$(cd "$SCRIPT_DIR/../src/ai_core" 2>/dev/null && pwd)"
 if [ -d "$AI_SRC" ]; then
-    cp "$AI_SRC/main.py" "$AI_DST/"
-    cp -r "$AI_SRC/src"  "$AI_DST/"
-    # Config files
-    for f in botsort_no_reid.yaml botsort_reid.yaml; do
-        [ -f "$AI_SRC/$f" ] && cp "$AI_SRC/$f" "$AI_DST/"
-    done
-    # Engine models (copy only if present — large files)
-    for f in "$AI_SRC"/*.engine; do
-        [ -f "$f" ] && cp "$f" "$AI_DST/"
-    done
-    # .env: always deploy .env.example; keep existing .env or create from example
-    [ -f "$AI_SRC/.env.example" ] && cp "$AI_SRC/.env.example" "$AI_DST/.env.example"
-    if [ -f "$AI_SRC/.env" ]; then
-        cp "$AI_SRC/.env" "$AI_DST/.env"
-    elif [ ! -f "$AI_DST/.env" ] && [ -f "$AI_SRC/.env.example" ]; then
-        cp "$AI_SRC/.env.example" "$AI_DST/.env"
+    # Create .env from example if not present (sync-config.py will manage it)
+    if [ ! -f "$AI_SRC/.env" ] && [ -f "$AI_SRC/.env.example" ]; then
+        cp "$AI_SRC/.env.example" "$AI_SRC/.env"
         warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
     fi
     # Install Python deps into shared venv
     if [ -d "$VENV_DIR" ] && [ -f "$AI_SRC/requirements.txt" ]; then
         "$VENV_DIR/bin/pip" install -q -r "$AI_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
     fi
-    cp "$SCRIPT_DIR/services/ai-core.service" /etc/systemd/system/ai-core.service
+    # Generate service file with actual source path
+    sed "s|__AI_CORE_DIR__|$AI_SRC|" "$SCRIPT_DIR/services/ai-core.service" \
+        > /etc/systemd/system/ai-core.service
     systemctl daemon-reload
     systemctl enable ai-core.service
-    log "AI Core deployed → $AI_DST"
+    log "AI Core runs in-place → $AI_SRC"
 else
-    warn "AI Core source not found at $AI_SRC — skipping"
+    warn "AI Core source not found — skipping"
 fi
 
 echo ""
