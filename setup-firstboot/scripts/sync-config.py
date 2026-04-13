@@ -444,6 +444,7 @@ db.close()
 # ---------------------------------------------------------------------------
 LOGIC_ENV = Path("/opt/logic_service/.env")
 LOGIC_ENV_EXAMPLE = Path("/opt/logic_service/.env.example")
+LOGIC_ENV.parent.mkdir(parents=True, exist_ok=True)
 
 SQS_ENV_KEYS = {
     "AWS_SQS_REGION": data.get("aws_sqs_region") or "",
@@ -504,6 +505,7 @@ else:
 # ---------------------------------------------------------------------------
 AI_ENV = Path("/opt/ai_core/.env")
 AI_ENV_EXAMPLE = Path("/opt/ai_core/.env.example")
+AI_ENV.parent.mkdir(parents=True, exist_ok=True)
 
 # Map facility name → PIPELINE_TYPE value
 FACILITY_TO_PIPELINE = {
