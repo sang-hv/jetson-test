@@ -155,6 +155,11 @@ FORCE_DEVICE_ENV="${FORCE_DEVICE_ENV:-0}"
 mkdir -p /etc/device /opt/device
 mkdir -p /data/mini-pc/db
 
+# Detection results directory (served by nginx at /detection/)
+# Use a shared-dir permission model so any service user can write images.
+mkdir -p /detection
+chmod 755 -R /detection/
+
 if [ "$FORCE_DEVICE_ENV" = "1" ]; then
     if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
         err "FORCE_DEVICE_ENV=1 but DEVICE_ID/BACKEND_URL/SECRET_KEY is empty"
