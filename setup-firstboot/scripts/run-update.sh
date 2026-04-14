@@ -139,7 +139,7 @@ ack_backend() {
         -d "$payload" \
         --connect-timeout 10 \
         --max-time 30 \
-        "${BACKEND_URL}/api/v1/update-logs/${DEVICE_ID}/ack" 2>&1 | _emit || err "Failed to ACK backend"
+        "${BACKEND_URL}/api/v1/cameras/${DEVICE_ID}/firmware-logs/ack" 2>&1 | _emit || err "Failed to ACK backend"
 }
 
 cleanup() {
