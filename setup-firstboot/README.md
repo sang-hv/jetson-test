@@ -608,6 +608,9 @@ sudo journalctl -u network-watchdog -f
 pactl list short sinks | grep -i "jabra\|echocancel"
 pactl list short sources | grep -i "jabra\|echocancel"
 
+# If USB mic/speaker is unplugged and replugged, re-run echo-cancel setup (user service)
+systemctl --user restart audio-autostart
+
 # Network check
 ip route show                          # Current routing table
 cat /etc/device/network.conf           # Network mode

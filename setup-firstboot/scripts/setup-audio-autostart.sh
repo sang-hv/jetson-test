@@ -8,6 +8,17 @@ WAIT_INTERVAL=2
 
 log() { echo "[audio-autostart] $(date '+%H:%M:%S') $*"; }
 
+# If this script is run with sudo/root, re-run it as the real user so we talk to
+# the correct per-user PulseAudio instance (/run/user/<uid>/pulse).
+if [ "${EUID:-$(id -u)}" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    _u="$SUDO_USER"
+    _uid="$(id -u "$_u" 2>/dev/null || true)"
+    if [ -n "$_uid" ] && [ -d "/run/user/$_uid" ]; then
+        log "Running under root; re-exec as user=$_u (uid=$_uid)"
+        exec su - "$_u" -c "XDG_RUNTIME_DIR=/run/user/$_uid PULSE_SERVER=unix:/run/user/$_uid/pulse/native /bin/bash /opt/audio/setup-audio-autostart.sh"
+    fi
+fi
+
 # --- Wait for PulseAudio ---
 log "Waiting for PulseAudio..."
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
@@ -19,7 +30,10 @@ while ! pactl info >/dev/null 2>&1; do
     waited=$((waited + WAIT_INTERVAL))
     if [ "$waited" -ge "$MAX_WAIT" ]; then
         log "PulseAudio not available after ${MAX_WAIT}s, starting manually..."
-        pulseaudio --start 2>/dev/null
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user start pulseaudio.service 2>/dev/null || true
+        fi
+        pulseaudio --start 2>/dev/null || true
         sleep 2
         break
     fi
