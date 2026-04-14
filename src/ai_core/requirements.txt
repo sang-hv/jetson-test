@@ -13,7 +13,7 @@ onnxruntime>=1.16.0         # For CPU-only systems (including macOS)
 # onnxruntime-gpu>=1.16.0   # For CUDA systems - uncomment and remove onnxruntime above
 
 # Supporting libraries
-numpy>=1.24.0               # Array operations
+numpy==1.26.4               # Array operations
 Pillow>=10.0.0              # Image loading for database
 
 # Note: Models download automatically on first run:
