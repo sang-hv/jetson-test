@@ -28,6 +28,15 @@ warn() { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
 err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
 step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
 
+run_stream() {
+    # Stream command output to both terminal and log (realtime).
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL -eL "$@" 2>&1 | tee -a "$LOG_FILE"
+    else
+        "$@" 2>&1 | tee -a "$LOG_FILE"
+    fi
+}
+
 if [ "$EUID" -ne 0 ]; then
     err "It needs to be run with sudo/root"
     exit 1
@@ -64,8 +73,8 @@ restart_service() {
     esac
     if [ "$name" = "nginx" ]; then
         log "Reloading nginx (test config first)..."
-        if nginx -t 2>&1; then
-            systemctl reload nginx 2>&1 \
+        if run_stream nginx -t; then
+            run_stream systemctl reload nginx \
                 && log "nginx reloaded" \
                 || err "Failed to reload nginx"
         else
@@ -74,12 +83,12 @@ restart_service() {
     elif [ "$name" = "audio-autostart" ]; then
         log "Restarting $name (user service for $ACTUAL_USER)..."
         su - "$ACTUAL_USER" -c \
-            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 \
+            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 | tee -a "$LOG_FILE" \
             && log "$name restarted" \
             || err "Failed to restart $name"
     else
         log "Restarting $name..."
-        systemctl restart "$name.service" 2>&1 \
+        run_stream systemctl restart "$name.service" \
             && log "$name restarted" \
             || err "Failed to restart $name"
     fi
@@ -240,7 +249,7 @@ chmod +x /opt/person_count_ws/start.sh
 
 cp "$SCRIPT_DIR/stream_auth/server.py" /opt/stream_auth/server.py
 
-pip3 install websockets pyzmq 2>&1 | tail -3 | tee -a "$LOG_FILE"
+run_stream pip3 install websockets pyzmq
 
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
     > /etc/systemd/system/backchannel.service
@@ -269,7 +278,7 @@ step "Phase 6/11: nginx reverse proxy"
 cp "$SCRIPT_DIR/config/nginx.conf" /etc/nginx/sites-available/go2rtc
 ln -sf /etc/nginx/sites-available/go2rtc /etc/nginx/sites-enabled/go2rtc
 rm -f /etc/nginx/sites-enabled/default
-nginx -t 2>&1 | tee -a "$LOG_FILE"
+run_stream nginx -t
 systemctl enable nginx
 log "Nginx configured"
 
@@ -354,7 +363,7 @@ if [ -d "$LOGIC_SRC" ]; then
     fi
     # Install Python deps into shared venv
     if [ -d "$VENV_DIR" ]; then
-        "$VENV_DIR/bin/pip" install -q -r "$LOGIC_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
+        run_stream "$VENV_DIR/bin/pip" install -r "$LOGIC_SRC/requirements.txt"
     fi
     cp "$SCRIPT_DIR/services/logic-service.service" /etc/systemd/system/logic-service.service
     systemctl daemon-reload
@@ -373,9 +382,9 @@ if [ -d "$AI_SRC" ]; then
         warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
     fi
     # Install Python deps into shared venv
-    if [ -d "$VENV_DIR" ] && [ -f "$AI_SRC/requirements.txt" ]; then
-        "$VENV_DIR/bin/pip" install -q -r "$AI_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
-    fi
+    # if [ -d "$VENV_DIR" ] && [ -f "$AI_SRC/requirements.txt" ]; then
+    #     "$VENV_DIR/bin/pip" install -q -r "$AI_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
+    # fi
     # Generate service file with actual source path
     sed "s|__AI_CORE_DIR__|$AI_SRC|" "$SCRIPT_DIR/services/ai-core.service" \
         > /etc/systemd/system/ai-core.service
@@ -424,7 +433,7 @@ if [ "$RESTART_MODE" = "all" ]; then
         [ -f "$f" ] || continue
         _timer=$(basename "$f")
         log "Restarting timer $_timer..."
-        systemctl restart "$_timer" 2>&1 \
+        run_stream systemctl restart "$_timer" \
             && log "$_timer restarted" \
             || err "Failed to restart $_timer"
     done
