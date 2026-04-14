@@ -25,7 +25,6 @@ import json
 import logging
 import os
 import subprocess
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -126,19 +125,17 @@ class UpdateHandler(BaseHTTPRequestHandler):
         # --- Spawn update in background ---
         log.info("Update requested: version=%s", version)
 
-        def _run_update():
-            try:
-                subprocess.run(
-                    ["/bin/bash", UPDATE_SCRIPT, version],
-                    timeout=3600,  # 1 hour max
-                )
-            except subprocess.TimeoutExpired:
-                log.error("Update script timed out after 1 hour")
-            except Exception as exc:
-                log.error("Update script failed: %s", exc)
-
-        thread = threading.Thread(target=_run_update, daemon=True)
-        thread.start()
+        try:
+            # Spawn a separate process (not a thread). This ensures the update keeps
+            # running even if device-update-server is restarted during deploy.
+            subprocess.Popen(
+                ["/bin/bash", UPDATE_SCRIPT, version],
+                start_new_session=True,
+            )
+        except Exception as exc:
+            log.error("Failed to spawn update script: %s", exc)
+            self._respond(500, {"error": "failed to spawn update"})
+            return
 
         self._respond(200, {
             "status": "accepted",

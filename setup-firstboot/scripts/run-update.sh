@@ -96,9 +96,11 @@ git_safe() {
     # Run git as the repo owner (typically the non-root user with credentials)
     # to avoid both "dubious ownership" and missing-credential failures.
     if [ -n "${REPO_OWNER:-}" ] && command -v sudo >/dev/null 2>&1; then
-        sudo -u "$REPO_OWNER" -H git -C "$REPO_ROOT" "$@"
+        sudo -u "$REPO_OWNER" -H env \
+            GIT_TERMINAL_PROMPT=0 \
+            git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
     else
-        git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
+        GIT_TERMINAL_PROMPT=0 git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
     fi
 }
 
@@ -228,8 +230,8 @@ main() {
     log "Checked out: $actual_version"
 
     # --- Run deploy ---
-    log "Running setup-services.sh --restart-all..."
-    if ! bash "$REPO_DIR/setup-services.sh" --restart-all 2>&1 | _emit; then
+    log "Running setup-services.sh --restart-all (skipping device-update-server restart)..."
+    if ! SKIP_RESTART_SERVICES="device-update-server" bash "$REPO_DIR/setup-services.sh" --restart-all 2>&1 | _emit; then
         err "setup-services.sh failed"
         ack_backend "setup-services.sh failed — check $LOG_FILE"
         exit 1
