@@ -20,6 +20,7 @@ LOCK_FILE="/tmp/device-update.lock"
 LOG_FILE="/tmp/device-update-$(echo "$VERSION" | tr '/' '-').log"
 DEVICE_ENV="/etc/device/device.env"
 REPO_DIR=""
+REPO_ROOT=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,6 +62,30 @@ find_repo_dir() {
         done
     done
     return 1
+}
+
+resolve_repo_root() {
+    # setup-firstboot/ is inside the git repo root (../).
+    # Git may refuse operations when run as root unless safe.directory is set.
+    local candidate
+    candidate="$(cd "$REPO_DIR/.." 2>/dev/null && pwd || true)"
+    if [ -n "$candidate" ] && [ -d "$candidate/.git" ]; then
+        echo "$candidate"
+        return 0
+    fi
+    # Fallback: if REPO_DIR itself is a git root
+    if [ -d "$REPO_DIR/.git" ]; then
+        echo "$REPO_DIR"
+        return 0
+    fi
+    echo "$candidate"
+    return 0
+}
+
+git_safe() {
+    # Run git commands with safe.directory to avoid "dubious ownership" failures
+    # when this script runs under root.
+    git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
 }
 
 generate_signature() {
@@ -147,29 +172,36 @@ main() {
     }
     log "Repo directory: $REPO_DIR"
 
+    REPO_ROOT="$(resolve_repo_root)"
+    if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT" ]; then
+        err "Cannot resolve repo root"
+        ack_backend "Cannot resolve repo root"
+        exit 1
+    fi
+    log "Repo root: $REPO_ROOT"
+
     # Get current branch/version before update
     local current_version
-    current_version=$(cd "$REPO_DIR" && git describe --tags --always 2>/dev/null || echo "unknown")
+    current_version=$(git_safe describe --tags --always 2>/dev/null || echo "unknown")
     log "Current version: $current_version"
 
     # --- Git fetch & checkout branch ---
     log "Fetching from origin..."
-    cd "$REPO_DIR"
-    if ! git fetch origin >> "$LOG_FILE" 2>&1; then
+    if ! git_safe fetch origin >> "$LOG_FILE" 2>&1; then
         err "git fetch failed"
         ack_backend "git fetch failed"
         exit 1
     fi
 
     log "Checking out branch $VERSION..."
-    if ! git checkout "$VERSION" >> "$LOG_FILE" 2>&1; then
+    if ! git_safe checkout "$VERSION" >> "$LOG_FILE" 2>&1; then
         err "git checkout $VERSION failed"
         ack_backend "git checkout $VERSION failed"
         exit 1
     fi
 
     log "Pulling latest from origin/$VERSION..."
-    if ! git pull origin "$VERSION" >> "$LOG_FILE" 2>&1; then
+    if ! git_safe pull origin "$VERSION" >> "$LOG_FILE" 2>&1; then
         err "git pull origin $VERSION failed"
         ack_backend "git pull origin $VERSION failed"
         exit 1
@@ -177,7 +209,7 @@ main() {
 
     # Verify checkout
     local actual_version
-    actual_version=$(git describe --tags --always 2>/dev/null || echo "$VERSION")
+    actual_version=$(git_safe describe --tags --always 2>/dev/null || echo "$VERSION")
     log "Checked out: $actual_version"
 
     # --- Run deploy ---
