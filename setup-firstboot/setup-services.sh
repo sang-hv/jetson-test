@@ -69,6 +69,18 @@ get_valid_services() {
 
 restart_service() {
     local name="$1"
+
+    # Allow callers (OTA) to skip restarting specific services.
+    # Example: SKIP_RESTART_SERVICES="device-update-server" to avoid self-termination.
+    if [ -n "${SKIP_RESTART_SERVICES:-}" ]; then
+        for _skip in $SKIP_RESTART_SERVICES; do
+            if [ "$name" = "$_skip" ]; then
+                log "Skipping $name (SKIP_RESTART_SERVICES)"
+                return 0
+            fi
+        done
+    fi
+
     # Skip oneshot services — they run on boot or via timers, not via restart
     case "$name" in
         sim7600-4g)
