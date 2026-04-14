@@ -118,7 +118,7 @@ connect_4g() {
     # Simple connect — MM handles bearer creation + IP setup via DHCP
     if mmcli -m "$MODEM_IDX" \
         --simple-connect="apn=$APN" \
-        2>&1 | tee -a /tmp/4g-connect.log; then
+        2>&1; then
         log "4G connected via ModemManager"
         return 0
     else

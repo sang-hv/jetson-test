@@ -7,7 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-LOG_FILE="${LOG_FILE:-/tmp/jetson-setup-$(date +%Y%m%d_%H%M%S).log}"
+# Optional file log (opt-in). Default: do not write logs to /tmp to avoid disk growth.
+LOG_FILE="${LOG_FILE:-}"
 ACTUAL_USER="${ACTUAL_USER:-${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}}"
 ACTUAL_HOME="${ACTUAL_HOME:-$(eval echo "~$ACTUAL_USER")}"
 ACTUAL_UID="${ACTUAL_UID:-$(id -u "$ACTUAL_USER")}"
@@ -18,10 +19,28 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
-err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
-step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
+_emit() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        tee -a "$LOG_FILE"
+    else
+        cat
+    fi
+}
+
+log()  { echo -e "${GREEN}[✓]${NC} $*" | _emit; }
+warn() { echo -e "${YELLOW}[!]${NC} $*" | _emit; }
+err()  { echo -e "${RED}[✗]${NC} $*" | _emit; }
+step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | _emit; }
+
+run_stream() {
+    # Stream command output to terminal (and optional log file) in realtime.
+    # stdbuf helps avoid buffering when commands produce long output.
+    if command -v stdbuf >/dev/null 2>&1; then
+        stdbuf -oL -eL "$@" 2>&1 | _emit
+    else
+        "$@" 2>&1 | _emit
+    fi
+}
 
 if [ "$EUID" -ne 0 ]; then
     err "It needs to be run with sudo/root"
@@ -29,7 +48,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 step "Phase 1/8: System packages"
-apt-get update -qq 2>&1 | tail -1 | tee -a "$LOG_FILE"
+run_stream apt-get update
 
 # Hold all NVIDIA/L4T packages BEFORE upgrade to prevent them from being
 # upgraded to incompatible versions that break the camera pipeline.
@@ -42,9 +61,9 @@ L4T_HOLD_EARLY=(
 apt-mark hold "${L4T_HOLD_EARLY[@]}" 2>/dev/null || true
 log "NVIDIA L4T packages held before upgrade"
 
-apt-get upgrade -y -qq 2>&1 | tail -3 | tee -a "$LOG_FILE"
+run_stream apt-get upgrade -y
 
-apt-get install -y -qq \
+run_stream apt-get install -y \
     build-essential cmake pkg-config \
     curl wget git nano vim htop net-tools \
     python3 python3-pip python3-venv python3-dev \
@@ -67,11 +86,11 @@ apt-get install -y -qq \
     usb-modeswitch \
     usb-modeswitch-data \
     minicom \
-    2>&1 | tail -8 | tee -a "$LOG_FILE"
+    | cat
 log "Base software packages installed"
 
 # Remove unnecessary services that waste CPU/RAM on edge devices
-apt-get remove -y -qq tracker-miner-fs apport 2>&1 | tail -3 | tee -a "$LOG_FILE" || true
+run_stream apt-get remove -y tracker-miner-fs apport || true
 # NOTE: apt autoremove is deferred to AFTER nvidia packages are held (Phase 5.5)
 # Running it here would remove nvidia-l4t-* packages before they are protected.
 log "Removed tracker-miner-fs (file indexer) and apport (crash reporter)"
@@ -112,10 +131,10 @@ usermod -aG video,audio,docker,i2c,dialout "$ACTUAL_USER" 2>/dev/null || true
 log "User $ACTUAL_USER added to required groups"
 
 step "Phase 4/8: Python environment"
-pip3 install jetson-stats 2>&1 | tail -1 | tee -a "$LOG_FILE" || warn "jetson-stats install failed"
+run_stream pip3 install jetson-stats || warn "jetson-stats install failed"
 sudo -u "$ACTUAL_USER" python3 -m venv "$VENV_DIR" 2>/dev/null || true
 if [ -f "$VENV_DIR/bin/pip" ]; then
-    sudo -u "$ACTUAL_USER" "$VENV_DIR/bin/pip" install --upgrade pip 2>&1 | tail -1 | tee -a "$LOG_FILE"
+    run_stream sudo -u "$ACTUAL_USER" "$VENV_DIR/bin/pip" install --upgrade pip
     log "Python venv created: $VENV_DIR"
 else
     warn "Python venv creation failed"
@@ -173,11 +192,11 @@ HOLD_PACKAGES=(
     nvidia-l4t-firmware
 )
 
-apt-get install -y -qq --allow-downgrades "${TRT_PACKAGES[@]}" nvidia-l4t-multimedia \
-    2>&1 | tail -5 | tee -a "$LOG_FILE" || warn "TensorRT install failed"
+run_stream apt-get install -y --allow-downgrades "${TRT_PACKAGES[@]}" nvidia-l4t-multimedia \
+    || warn "TensorRT install failed"
 log "TensorRT ${TRT_VERSION} installed"
 
-apt-mark hold "${HOLD_PACKAGES[@]}" 2>&1 | tee -a "$LOG_FILE"
+run_stream apt-mark hold "${HOLD_PACKAGES[@]}"
 log "TensorRT + NVIDIA packages held (use 'apt-mark unhold' to release)"
 
 # WARNING: Do NOT run apt autoremove on Jetson.
@@ -191,7 +210,7 @@ for pkg_name in libopenal-data libzvbi-common; do
     installed_ver=$(dpkg-query -W -f='${Version}' "$pkg_name" 2>/dev/null || echo "")
     if echo "$installed_ver" | grep -q "sav0"; then
         warn "Downgrading $pkg_name from savoury1 PPA..."
-        apt-get install -y --allow-downgrades "$pkg_name" 2>&1 | tee -a "$LOG_FILE"
+        apt-get install -y --allow-downgrades "$pkg_name" 2>&1 | _emit
     fi
 done
 
@@ -213,11 +232,11 @@ PRELOAD_LIBS=(
 )
 if [ ! -f "/lib/aarch64-linux-gnu/libjpeg.so.8" ]; then
     log "Installing libjpeg-turbo8..."
-    apt-get install -y -qq libjpeg-turbo8 2>&1 | tail -1 | tee -a "$LOG_FILE"
+    run_stream apt-get install -y libjpeg-turbo8
 fi
 if [ ! -f "/usr/lib/aarch64-linux-gnu/nvidia/libnvjpeg.so" ]; then
     log "Installing nvidia-l4t-multimedia..."
-    apt-get install -y -qq nvidia-l4t-multimedia 2>&1 | tail -1 | tee -a "$LOG_FILE"
+    run_stream apt-get install -y nvidia-l4t-multimedia
 fi
 for lib in "${PRELOAD_LIBS[@]}"; do
     if [ ! -f "$lib" ]; then

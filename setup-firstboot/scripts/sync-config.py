@@ -440,6 +440,152 @@ if zones:
 db.close()
 
 # ---------------------------------------------------------------------------
+# Sync SQS config → /opt/logic_service/.env
+# ---------------------------------------------------------------------------
+LOGIC_ENV = Path("/opt/logic_service/.env")
+LOGIC_ENV_EXAMPLE = Path("/opt/logic_service/.env.example")
+LOGIC_ENV.parent.mkdir(parents=True, exist_ok=True)
+
+SQS_ENV_KEYS = {
+    "AWS_SQS_REGION": data.get("aws_sqs_region") or "",
+    "AWS_SQS_QUEUE_URL": data.get("aws_sqs_queue_url") or "",
+    "AWS_SQS_ACCESS_KEY_ID": data.get("aws_sqs_access_key_id") or "",
+    "AWS_SQS_SECRET_ACCESS_KEY": data.get("aws_sqs_secret_access_key") or "",
+}
+
+if any(SQS_ENV_KEYS.values()):
+    # Read existing .env (or create from .env.example if missing)
+    if LOGIC_ENV.exists():
+        env_lines = LOGIC_ENV.read_text().splitlines()
+    elif LOGIC_ENV_EXAMPLE.exists():
+        env_lines = LOGIC_ENV_EXAMPLE.read_text().splitlines()
+        log(f"Logic Service .env created from .env.example")
+    else:
+        env_lines = [f"{k}=" for k in SQS_ENV_KEYS]
+
+    # Update matching KEY=... lines, preserving order and comments
+    updated_keys: set[str] = set()
+    new_lines: list[str] = []
+    for line in env_lines:
+        stripped = line.strip()
+        matched = False
+        for key, val in SQS_ENV_KEYS.items():
+            if stripped.startswith(f"{key}="):
+                new_lines.append(f"{key}={val}")
+                updated_keys.add(key)
+                matched = True
+                break
+        if not matched:
+            new_lines.append(line)
+
+    # Append any keys not yet present
+    for key, val in SQS_ENV_KEYS.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={val}")
+
+    new_content = "\n".join(new_lines) + "\n"
+    old_content = LOGIC_ENV.read_text() if LOGIC_ENV.exists() else ""
+
+    if new_content != old_content:
+        LOGIC_ENV.write_text(new_content)
+        log(f"Logic Service .env updated → {LOGIC_ENV}")
+        # Restart logic-service so it picks up new credentials
+        subprocess.run(
+            ["systemctl", "restart", "logic-service"],
+            capture_output=True, text=True,
+        )
+        log("logic-service restarted (SQS config changed)")
+    else:
+        log("Logic Service .env unchanged — skipping")
+else:
+    log("No SQS config in API response — skipping logic_service .env")
+
+# ---------------------------------------------------------------------------
+# Sync PIPELINE_TYPE → ai_core/.env  &  restart ai-core when needed
+# ---------------------------------------------------------------------------
+# ai_core lives inside the repo (sibling to setup-firstboot)
+_repo_path_file = Path("/etc/device/repo-path")
+if _repo_path_file.exists():
+    _repo_root = _repo_path_file.read_text().strip().rstrip("/")
+    # repo-path points to setup-firstboot/, parent is the repo root
+    _ai_core_dir = Path(_repo_root).parent / "src" / "ai_core"
+else:
+    _ai_core_dir = Path("/opt/ai_core")
+
+AI_ENV = _ai_core_dir / ".env"
+AI_ENV_EXAMPLE = _ai_core_dir / ".env.example"
+_ai_core_dir.mkdir(parents=True, exist_ok=True)
+
+# Map facility name → PIPELINE_TYPE value
+FACILITY_TO_PIPELINE = {
+    "Family": "home",
+    "Store": "shop",
+    "Enterprise": "enterprise",
+}
+
+ai_restart_needed = False
+
+# Determine new PIPELINE_TYPE from facility
+new_facility = settings_map.get("facility", "")
+new_pipeline_type = FACILITY_TO_PIPELINE.get(new_facility, "")
+
+if new_pipeline_type:
+    # Read existing .env or create from .env.example
+    if AI_ENV.exists():
+        ai_lines = AI_ENV.read_text().splitlines()
+    elif AI_ENV_EXAMPLE.exists():
+        ai_lines = AI_ENV_EXAMPLE.read_text().splitlines()
+        log("AI Core .env created from .env.example")
+    else:
+        ai_lines = [f"PIPELINE_TYPE={new_pipeline_type}"]
+
+    # Update PIPELINE_TYPE line
+    ai_updated = False
+    ai_new_lines: list[str] = []
+    for line in ai_lines:
+        if line.strip().startswith("PIPELINE_TYPE="):
+            old_val = line.split("=", 1)[1].strip()
+            ai_new_lines.append(f"PIPELINE_TYPE={new_pipeline_type}")
+            if old_val != new_pipeline_type:
+                log(f"PIPELINE_TYPE changed: {old_val} → {new_pipeline_type}")
+                ai_restart_needed = True
+            ai_updated = True
+        else:
+            ai_new_lines.append(line)
+
+    if not ai_updated:
+        ai_new_lines.append(f"PIPELINE_TYPE={new_pipeline_type}")
+        ai_restart_needed = True
+
+    ai_new_content = "\n".join(ai_new_lines) + "\n"
+    ai_old_content = AI_ENV.read_text() if AI_ENV.exists() else ""
+
+    if ai_new_content != ai_old_content:
+        AI_ENV.write_text(ai_new_content)
+        log(f"AI Core .env updated → {AI_ENV}")
+else:
+    log("No facility in API response — skipping ai_core .env PIPELINE_TYPE")
+
+# Face embeddings changed → also restart ai-core (it reloads face DB on startup)
+face_updated_at_var = face_resp.get("updated_at") if face_resp else ""
+if (
+    face_updated_at_var
+    and stored_face_embeddings_updated_at
+    and face_updated_at_var != stored_face_embeddings_updated_at
+):
+    log("Face embeddings updated_at changed — ai-core restart needed")
+    ai_restart_needed = True
+
+if ai_restart_needed:
+    subprocess.run(
+        ["systemctl", "restart", "ai-core"],
+        capture_output=True, text=True,
+    )
+    log("ai-core restarted (facility or face_embeddings changed)")
+else:
+    log("AI Core: no changes — skipping restart")
+
+# ---------------------------------------------------------------------------
 # Detect cloudflare token changes & restart service
 # ---------------------------------------------------------------------------
 

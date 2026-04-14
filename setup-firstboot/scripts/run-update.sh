@@ -17,15 +17,26 @@ set -uo pipefail
 VERSION="${1:?Usage: run-update.sh <branch>}"
 
 LOCK_FILE="/tmp/device-update.lock"
-LOG_FILE="/tmp/device-update-$(echo "$VERSION" | tr '/' '-').log"
+# Log file is opt-in. Default: rely on stdout/stderr (systemd journal) to avoid /tmp disk growth.
+LOG_FILE="${LOG_FILE:-}"
 DEVICE_ENV="/etc/device/device.env"
 REPO_DIR=""
+REPO_ROOT=""
+REPO_OWNER=""
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-log()  { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
-err()  { echo "[$(date '+%H:%M:%S')] ERROR: $*" | tee -a "$LOG_FILE" >&2; }
+_emit() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        tee -a "$LOG_FILE"
+    else
+        cat
+    fi
+}
+
+log()  { echo "[$(date '+%H:%M:%S')] $*" | _emit; }
+err()  { echo "[$(date '+%H:%M:%S')] ERROR: $*" | _emit >&2; }
 
 load_env() {
     local key val
@@ -63,6 +74,34 @@ find_repo_dir() {
     return 1
 }
 
+resolve_repo_root() {
+    # setup-firstboot/ is inside the git repo root (../).
+    # Git may refuse operations when run as root unless safe.directory is set.
+    local candidate
+    candidate="$(cd "$REPO_DIR/.." 2>/dev/null && pwd || true)"
+    if [ -n "$candidate" ] && [ -d "$candidate/.git" ]; then
+        echo "$candidate"
+        return 0
+    fi
+    # Fallback: if REPO_DIR itself is a git root
+    if [ -d "$REPO_DIR/.git" ]; then
+        echo "$REPO_DIR"
+        return 0
+    fi
+    echo "$candidate"
+    return 0
+}
+
+git_safe() {
+    # Run git as the repo owner (typically the non-root user with credentials)
+    # to avoid both "dubious ownership" and missing-credential failures.
+    if [ -n "${REPO_OWNER:-}" ] && command -v sudo >/dev/null 2>&1; then
+        sudo -u "$REPO_OWNER" -H git -C "$REPO_ROOT" "$@"
+    else
+        git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
+    fi
+}
+
 generate_signature() {
     local ts="$1"
     echo -n "${DEVICE_ID}|${ts}" | openssl dgst -sha256 -hmac "$SECRET_KEY" | awk '{print $NF}'
@@ -98,8 +137,7 @@ ack_backend() {
         -d "$payload" \
         --connect-timeout 10 \
         --max-time 30 \
-        "${BACKEND_URL}/api/v1/update-logs/${DEVICE_ID}/ack" \
-        >> "$LOG_FILE" 2>&1 || err "Failed to ACK backend"
+        "${BACKEND_URL}/api/v1/update-logs/${DEVICE_ID}/ack" 2>&1 | _emit || err "Failed to ACK backend"
 }
 
 cleanup() {
@@ -147,29 +185,38 @@ main() {
     }
     log "Repo directory: $REPO_DIR"
 
+    REPO_ROOT="$(resolve_repo_root)"
+    if [ -z "$REPO_ROOT" ] || [ ! -d "$REPO_ROOT" ]; then
+        err "Cannot resolve repo root"
+        ack_backend "Cannot resolve repo root"
+        exit 1
+    fi
+    log "Repo root: $REPO_ROOT"
+    REPO_OWNER="$(stat -c '%U' "$REPO_ROOT" 2>/dev/null || echo "")"
+    [ -n "$REPO_OWNER" ] && log "Repo owner: $REPO_OWNER"
+
     # Get current branch/version before update
     local current_version
-    current_version=$(cd "$REPO_DIR" && git describe --tags --always 2>/dev/null || echo "unknown")
+    current_version=$(git_safe describe --tags --always 2>/dev/null || echo "unknown")
     log "Current version: $current_version"
 
     # --- Git fetch & checkout branch ---
     log "Fetching from origin..."
-    cd "$REPO_DIR"
-    if ! git fetch origin >> "$LOG_FILE" 2>&1; then
+    if ! git_safe fetch origin 2>&1 | _emit; then
         err "git fetch failed"
         ack_backend "git fetch failed"
         exit 1
     fi
 
     log "Checking out branch $VERSION..."
-    if ! git checkout "$VERSION" >> "$LOG_FILE" 2>&1; then
+    if ! git_safe checkout "$VERSION" 2>&1 | _emit; then
         err "git checkout $VERSION failed"
         ack_backend "git checkout $VERSION failed"
         exit 1
     fi
 
     log "Pulling latest from origin/$VERSION..."
-    if ! git pull origin "$VERSION" >> "$LOG_FILE" 2>&1; then
+    if ! git_safe pull origin "$VERSION" 2>&1 | _emit; then
         err "git pull origin $VERSION failed"
         ack_backend "git pull origin $VERSION failed"
         exit 1
@@ -177,12 +224,12 @@ main() {
 
     # Verify checkout
     local actual_version
-    actual_version=$(git describe --tags --always 2>/dev/null || echo "$VERSION")
+    actual_version=$(git_safe describe --tags --always 2>/dev/null || echo "$VERSION")
     log "Checked out: $actual_version"
 
     # --- Run deploy ---
     log "Running setup-services.sh --restart-all..."
-    if ! bash "$REPO_DIR/setup-services.sh" --restart-all >> "$LOG_FILE" 2>&1; then
+    if ! bash "$REPO_DIR/setup-services.sh" --restart-all 2>&1 | _emit; then
         err "setup-services.sh failed"
         ack_backend "setup-services.sh failed — check $LOG_FILE"
         exit 1

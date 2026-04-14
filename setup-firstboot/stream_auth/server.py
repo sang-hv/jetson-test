@@ -32,6 +32,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -198,11 +199,26 @@ class AuthHandler(BaseHTTPRequestHandler):
         except Exception:
             token_list = []
 
-        if not token_list:
+        token = token_list[0] if token_list else ""
+
+        # Fallback: allow token from cookie for clients that don't preserve query
+        # params across HLS playlist/segment requests (common on iOS).
+        if not token:
+            try:
+                cookie_header = self.headers.get("Cookie", "")
+                if cookie_header:
+                    jar = SimpleCookie()
+                    jar.load(cookie_header)
+                    morsel = jar.get("stream_token")
+                    if morsel is not None:
+                        token = morsel.value
+            except Exception:
+                token = ""
+
+        if not token:
             self._respond(401, "missing token")
             return
 
-        token = token_list[0]
         status, reason = _validate_token(token, self.device_id, self.secret_key)
         if status != 200:
             log.warning("Auth denied [%d] %s — %s", status, original_uri, reason)

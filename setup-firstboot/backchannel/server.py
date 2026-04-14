@@ -188,8 +188,6 @@ class BackchannelServer:
     def start_pipeline(self, client: str, fmt: str) -> bool:
         """Start audio pipeline. PCMU→pacat direct, WebM→FFmpeg→pacat."""
         try:
-            err = open(f'/tmp/backchannel_{client.replace(":", "_")}.log', 'a')
-
             if fmt == 'pcmu':
                 # PCMU: FFmpeg with zero probing (format pre-specified)
                 ffmpeg_cmd = [
@@ -205,9 +203,9 @@ class BackchannelServer:
                 pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1',
                              '--latency-msec=30', '--device', self.sink]
                 self.process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE, stderr=err)
+                                                stdout=subprocess.PIPE)
                 self.pacat = subprocess.Popen(pacat_cmd, stdin=self.process.stdout,
-                                              stdout=subprocess.DEVNULL, stderr=err)
+                                              stdout=subprocess.DEVNULL)
                 self.process.stdout.close()
                 log.info(f"[{client}] PCMU FFmpeg→pacat (zero-probe) "
                          f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid})")
@@ -226,9 +224,9 @@ class BackchannelServer:
                 pacat_cmd = ['pacat', '--format=s16le', '--rate=48000', '--channels=1',
                              '--latency-msec=50', '--device', self.sink]
                 self.process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE,
-                                                stdout=subprocess.PIPE, stderr=err)
+                                                stdout=subprocess.PIPE)
                 self.pacat = subprocess.Popen(pacat_cmd, stdin=self.process.stdout,
-                                              stdout=subprocess.DEVNULL, stderr=err)
+                                              stdout=subprocess.DEVNULL)
                 self.process.stdout.close()
                 log.info(f"[{client}] WebM/Opus FFmpeg→pacat "
                          f"(ffmpeg={self.process.pid}, pacat={self.pacat.pid})")

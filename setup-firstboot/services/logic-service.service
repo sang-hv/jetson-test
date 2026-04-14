@@ -1,0 +1,23 @@
+[Unit]
+Description=Logic Service (ZMQ subscriber + FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+WorkingDirectory=/opt/logic_service
+ExecStart=/data/venv/mini-pc/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8095 --log-level info
+
+Restart=always
+RestartSec=5
+
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=logic-service
+
+[Install]
+WantedBy=multi-user.target

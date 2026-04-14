@@ -28,6 +28,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,19 +59,60 @@ class UpdateHandler(BaseHTTPRequestHandler):
         log.info(fmt, *args)
 
     def do_POST(self) -> None:
-        if self.path != "/update":
+        path = urlsplit(self.path).path
+        if path != "/update":
             self._respond(404, {"error": "not found"})
             return
 
         # --- Parse body ---
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-        except (json.JSONDecodeError, ValueError):
-            self._respond(400, {"error": "invalid JSON body"})
-            return
+        content_type = (self.headers.get("Content-Type") or "").lower()
+        version = ""
 
-        version = body.get("version", "")
+        if "application/json" in content_type:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+            except (json.JSONDecodeError, ValueError):
+                self._respond(400, {"error": "invalid JSON body"})
+                return
+            version = str(body.get("version", "") or "").strip()
+
+        elif "multipart/form-data" in content_type:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length)
+                marker = b'name="version"'
+                i = raw.find(marker)
+                if i != -1:
+                    # Very small multipart parser: extract the first value for "version".
+                    # Supports curl --form 'version="..."'
+                    after = raw[i + len(marker):]
+                    # headers end with \r\n\r\n; content ends at next \r\n--boundary
+                    h_end = after.find(b"\r\n\r\n")
+                    if h_end != -1:
+                        content = after[h_end + 4 :]
+                        v_end = content.find(b"\r\n")
+                        if v_end != -1:
+                            version = content[:v_end].decode("utf-8", errors="replace").strip()
+            except Exception:
+                self._respond(400, {"error": "invalid multipart form body"})
+                return
+
+        elif "application/x-www-form-urlencoded" in content_type:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length).decode("utf-8", errors="replace")
+                version = (parse_qs(raw).get("version", [""])[0] or "").strip()
+            except ValueError:
+                self._respond(400, {"error": "invalid form body"})
+                return
+
+        else:
+            self._respond(
+                400,
+                {"error": "unsupported Content-Type (use JSON or form field 'version')"},
+            )
+            return
 
         if not version:
             self._respond(400, {"error": "missing 'version' field"})
@@ -105,7 +147,8 @@ class UpdateHandler(BaseHTTPRequestHandler):
         })
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        path = urlsplit(self.path).path
+        if path == "/health":
             updating = _is_update_running()
             self._respond(200, {
                 "status": "updating" if updating else "idle",

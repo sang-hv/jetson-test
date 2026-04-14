@@ -73,10 +73,15 @@ def get_software_version() -> str:
     if not repo_path:
         return "unknown"
 
+    repo_root = repo_path
+    # If marker points to setup-firstboot/, repo root is parent directory.
+    if os.path.basename(repo_root) == "setup-firstboot":
+        repo_root = os.path.dirname(repo_root)
+
     try:
         result = subprocess.run(
-            ["git", "describe", "--tags", "--always"],
-            cwd=repo_path,
+            ["git", "-c", f"safe.directory={repo_root}", "describe", "--tags", "--always"],
+            cwd=repo_root,
             capture_output=True,
             text=True,
             timeout=5,

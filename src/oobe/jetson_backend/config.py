@@ -47,8 +47,32 @@ NET_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef9"  # Read/Notify: tr
 NET_SETUP_CHAR_UUID        = "12345678-1234-5678-1234-56789abcdefa"  # Write: gửi loại mạng ("lte"/"lan")
 NET_SETUP_STATUS_CHAR_UUID = "12345678-1234-5678-1234-56789abcdefb"  # Read/Notify: trạng thái setup
 
-# Mã PIN cố định cho xác thực kết nối BLE
-PIN_CODE = "123456"
+# Mã PIN cho xác thực kết nối BLE.
+# Loaded from SQLite (camera_settings.bluetooth_password) at runtime;
+# falls back to this default if the DB row is missing.
+_DEFAULT_PIN = "123456"
+
+
+def _load_pin_from_db() -> str:
+    """Read bluetooth_password from logic_service.db, return default if unavailable."""
+    import sqlite3
+    from pathlib import Path
+
+    for db_path in ("/data/mini-pc/db/logic_service.db", str(Path.home() / "data/db/logic_service.db")):
+        try:
+            db = sqlite3.connect(db_path, timeout=3)
+            row = db.execute(
+                "SELECT value FROM camera_settings WHERE key = 'bluetooth_password' LIMIT 1"
+            ).fetchone()
+            db.close()
+            if row and row[0]:
+                return str(row[0]).strip()
+        except Exception:
+            continue
+    return _DEFAULT_PIN
+
+
+PIN_CODE = _load_pin_from_db()
 
 # =============================================================================
 # TRẠNG THÁI KẾT NỐI WIFI
