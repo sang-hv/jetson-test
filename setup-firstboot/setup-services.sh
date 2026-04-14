@@ -14,7 +14,22 @@ set -euo pipefail
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # Optional file log (opt-in). Default: do not write logs to /tmp to avoid disk growth.
 LOG_FILE="${LOG_FILE:-}"
-ACTUAL_USER="${ACTUAL_USER:-${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}}"
+
+# Resolve the "real" non-root user for user services (audio-autostart).
+# - Normal manual runs: SUDO_USER is set → use it
+# - OTA runs: executed as root via systemd with no SUDO_USER → use repo owner
+if [ -n "${ACTUAL_USER:-}" ]; then
+    _resolved_user="$ACTUAL_USER"
+elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    _resolved_user="$SUDO_USER"
+elif [ -f /etc/device/repo-path ]; then
+    _rp="$(cat /etc/device/repo-path 2>/dev/null || true)"
+    _repo_root="$(cd "${_rp%/}/.." 2>/dev/null && pwd || true)"
+    if [ -n "$_repo_root" ] && [ -d "$_repo_root" ]; then
+        _resolved_user="$(stat -c '%U' "$_repo_root" 2>/dev/null || true)"
+    fi
+fi
+ACTUAL_USER="${_resolved_user:-$(logname 2>/dev/null || echo $USER)}"
 ACTUAL_HOME="${ACTUAL_HOME:-$(eval echo "~$ACTUAL_USER")}"
 ACTUAL_UID="${ACTUAL_UID:-$(id -u "$ACTUAL_USER")}"
 
