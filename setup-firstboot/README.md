@@ -461,7 +461,7 @@ If device doesn't ACK within 1 hour, backend marks `update_logs.status = "failed
 6. ACK backend with result
 7. Release lock
 
-Logs: `/tmp/device-update-<version>.log`
+Logs: via `journalctl -u device-update-server` (and `journalctl -t device-update` if using logger). File logs are optional via `LOG_FILE=...`.
 
 ## Authentication
 
@@ -630,7 +630,8 @@ sudo journalctl -u cron --grep="sync-config\|device-update" --since="1 hour ago"
 # OTA update
 sudo systemctl status device-update-server   # Update server status
 curl http://127.0.0.1:8092/health            # Update health check
-cat /tmp/device-update-*.log                 # Update logs
+sudo journalctl -u device-update-server -n 200 --no-pager
+sudo journalctl -t device-update -n 200 --no-pager
 cat /etc/device/repo-path                    # Git repo path
 cd $(cat /etc/device/repo-path) && git describe --tags --always  # Current version
 
@@ -656,6 +657,6 @@ python3 /opt/stream_auth/check_token.py <token>
 | Config not syncing | `cat /etc/device/device.env` | Verify BACKEND_URL reachable, check SECRET_KEY |
 | PIPELINE_TYPE wrong | `cat /opt/ai_core/.env` | Check facility in DB, verify sync-config ran |
 | OTA update not responding | `systemctl status device-update-server` | Restart service, check `/etc/device/device.env` |
-| OTA update failed | `cat /tmp/device-update-*.log` | Check git access, disk space, service health |
+| OTA update failed | `journalctl -u device-update-server` | Check git access, disk space, service health |
 | Version not reporting | `python3 /opt/device/device-update.py` | Check `repo-path`, git tags |
 | Network keeps switching | `journalctl -u network-watchdog` | Adjust `CHECK_INTERVAL` / `MAX_RETRIES` in network.conf |

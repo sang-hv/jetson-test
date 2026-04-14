@@ -7,7 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-LOG_FILE="${LOG_FILE:-/tmp/jetson-setup-$(date +%Y%m%d_%H%M%S).log}"
+# Optional file log (opt-in). Default: do not write logs to /tmp to avoid disk growth.
+LOG_FILE="${LOG_FILE:-}"
 ACTUAL_USER="${ACTUAL_USER:-${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}}"
 ACTUAL_HOME="${ACTUAL_HOME:-$(eval echo "~$ACTUAL_USER")}"
 ACTUAL_UID="${ACTUAL_UID:-$(id -u "$ACTUAL_USER")}"
@@ -18,18 +19,26 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
-err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
-step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
+_emit() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        tee -a "$LOG_FILE"
+    else
+        cat
+    fi
+}
+
+log()  { echo -e "${GREEN}[✓]${NC} $*" | _emit; }
+warn() { echo -e "${YELLOW}[!]${NC} $*" | _emit; }
+err()  { echo -e "${RED}[✗]${NC} $*" | _emit; }
+step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | _emit; }
 
 run_stream() {
-    # Stream command output to both terminal and log (realtime).
+    # Stream command output to terminal (and optional log file) in realtime.
     # stdbuf helps avoid buffering when commands produce long output.
     if command -v stdbuf >/dev/null 2>&1; then
-        stdbuf -oL -eL "$@" 2>&1 | tee -a "$LOG_FILE"
+        stdbuf -oL -eL "$@" 2>&1 | _emit
     else
-        "$@" 2>&1 | tee -a "$LOG_FILE"
+        "$@" 2>&1 | _emit
     fi
 }
 
@@ -201,7 +210,7 @@ for pkg_name in libopenal-data libzvbi-common; do
     installed_ver=$(dpkg-query -W -f='${Version}' "$pkg_name" 2>/dev/null || echo "")
     if echo "$installed_ver" | grep -q "sav0"; then
         warn "Downgrading $pkg_name from savoury1 PPA..."
-        apt-get install -y --allow-downgrades "$pkg_name" 2>&1 | tee -a "$LOG_FILE"
+        apt-get install -y --allow-downgrades "$pkg_name" 2>&1 | _emit
     fi
 done
 

@@ -12,7 +12,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-LOG_FILE="${LOG_FILE:-/tmp/jetson-setup-$(date +%Y%m%d_%H%M%S).log}"
+# Optional file log (opt-in). Default: do not write logs to /tmp to avoid disk growth.
+LOG_FILE="${LOG_FILE:-}"
 ACTUAL_USER="${ACTUAL_USER:-${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}}"
 ACTUAL_HOME="${ACTUAL_HOME:-$(eval echo "~$ACTUAL_USER")}"
 ACTUAL_UID="${ACTUAL_UID:-$(id -u "$ACTUAL_USER")}"
@@ -23,17 +24,25 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
-err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
-step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
+_emit() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        tee -a "$LOG_FILE"
+    else
+        cat
+    fi
+}
+
+log()  { echo -e "${GREEN}[✓]${NC} $*" | _emit; }
+warn() { echo -e "${YELLOW}[!]${NC} $*" | _emit; }
+err()  { echo -e "${RED}[✗]${NC} $*" | _emit; }
+step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | _emit; }
 
 run_stream() {
-    # Stream command output to both terminal and log (realtime).
+    # Stream command output to terminal (and optional log file) in realtime.
     if command -v stdbuf >/dev/null 2>&1; then
-        stdbuf -oL -eL "$@" 2>&1 | tee -a "$LOG_FILE"
+        stdbuf -oL -eL "$@" 2>&1 | _emit
     else
-        "$@" 2>&1 | tee -a "$LOG_FILE"
+        "$@" 2>&1 | _emit
     fi
 }
 
@@ -83,7 +92,7 @@ restart_service() {
     elif [ "$name" = "audio-autostart" ]; then
         log "Restarting $name (user service for $ACTUAL_USER)..."
         su - "$ACTUAL_USER" -c \
-            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 | tee -a "$LOG_FILE" \
+            "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user restart $name.service" 2>&1 | _emit \
             && log "$name restarted" \
             || err "Failed to restart $name"
     else
@@ -229,10 +238,10 @@ fi
 
 if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
     log "Running first config sync..."
-    python3 /opt/device/sync-config.py 2>&1 | tee -a "$LOG_FILE" || warn "First sync failed (cron will retry)"
+    python3 /opt/device/sync-config.py 2>&1 | _emit || warn "First sync failed (cron will retry)"
 
     log "Running first update device info..."
-    python3 /opt/device/device-update.py 2>&1 | tee -a "$LOG_FILE" || warn "First update device failed (cron will retry)"
+    python3 /opt/device/device-update.py 2>&1 | _emit || warn "First update device failed (cron will retry)"
 fi
 
 step "Phase 3/11: cloudflared service check"
@@ -297,7 +306,7 @@ mkdir -p "$SYSTEMD_USER_DIR"
 cp "$SCRIPT_DIR/services/audio-autostart.service" "$SYSTEMD_USER_DIR/audio-autostart.service"
 chown -R "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.config/systemd"
 
-su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user daemon-reload && systemctl --user enable audio-autostart.service" 2>&1 | tee -a "$LOG_FILE"
+su - "$ACTUAL_USER" -c "export XDG_RUNTIME_DIR=/run/user/$ACTUAL_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$ACTUAL_UID/bus && systemctl --user daemon-reload && systemctl --user enable audio-autostart.service" 2>&1 | _emit
 loginctl enable-linger "$ACTUAL_USER"
 log "Audio autostart service enabled"
 

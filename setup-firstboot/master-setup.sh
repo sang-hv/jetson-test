@@ -11,7 +11,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="/tmp/jetson-setup-$(date +%Y%m%d_%H%M%S).log"
+# Optional file log (opt-in). Default: do not write logs to /tmp to avoid disk growth.
+LOG_FILE="${LOG_FILE:-}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -19,9 +20,17 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[✓]${NC} $*" | tee -a "$LOG_FILE"; }
-err()  { echo -e "${RED}[✗]${NC} $*" | tee -a "$LOG_FILE"; }
-step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | tee -a "$LOG_FILE"; }
+_emit() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        tee -a "$LOG_FILE"
+    else
+        cat
+    fi
+}
+
+log()  { echo -e "${GREEN}[✓]${NC} $*" | _emit; }
+err()  { echo -e "${RED}[✗]${NC} $*" | _emit; }
+step() { echo -e "\n${BLUE}━━━ $* ━━━${NC}" | _emit; }
 
 usage() {
     cat <<'EOF'
@@ -90,7 +99,11 @@ echo "╚═══════════════════════�
 echo ""
 echo "  User:     $ACTUAL_USER"
 echo "  Home:     $ACTUAL_HOME"
-echo "  Log:      $LOG_FILE"
+if [ -n "${LOG_FILE:-}" ]; then
+    echo "  Log:      $LOG_FILE"
+else
+    echo "  Log:      (disabled)"
+fi
 echo ""
 
 if [ ! -f "$SCRIPT_DIR/install-software.sh" ]; then
@@ -114,6 +127,8 @@ echo "╔═══════════════════════�
 echo "║   ✅ Master Setup Complete!                   ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
-echo "  Log saved: $LOG_FILE"
+if [ -n "${LOG_FILE:-}" ]; then
+    echo "  Log saved: $LOG_FILE"
+fi
 echo ""
 log "Done"
