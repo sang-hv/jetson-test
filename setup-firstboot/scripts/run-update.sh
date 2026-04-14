@@ -21,6 +21,7 @@ LOG_FILE="/tmp/device-update-$(echo "$VERSION" | tr '/' '-').log"
 DEVICE_ENV="/etc/device/device.env"
 REPO_DIR=""
 REPO_ROOT=""
+REPO_OWNER=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,9 +84,13 @@ resolve_repo_root() {
 }
 
 git_safe() {
-    # Run git commands with safe.directory to avoid "dubious ownership" failures
-    # when this script runs under root.
-    git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
+    # Run git as the repo owner (typically the non-root user with credentials)
+    # to avoid both "dubious ownership" and missing-credential failures.
+    if [ -n "${REPO_OWNER:-}" ] && command -v sudo >/dev/null 2>&1; then
+        sudo -u "$REPO_OWNER" -H git -C "$REPO_ROOT" "$@"
+    else
+        git -C "$REPO_ROOT" -c safe.directory="$REPO_ROOT" "$@"
+    fi
 }
 
 generate_signature() {
@@ -179,6 +184,8 @@ main() {
         exit 1
     fi
     log "Repo root: $REPO_ROOT"
+    REPO_OWNER="$(stat -c '%U' "$REPO_ROOT" 2>/dev/null || echo "")"
+    [ -n "$REPO_OWNER" ] && log "Repo owner: $REPO_OWNER"
 
     # Get current branch/version before update
     local current_version
