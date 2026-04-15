@@ -91,30 +91,40 @@ done < <(pactl list short modules 2>/dev/null | awk '$2=="module-echo-cancel"{pr
 SPEAKER_SINK="${USB_SINK:-$(pactl get-default-sink)}"
 MIC_SOURCE="${USB_SOURCE:-$(pactl get-default-source)}"
 
+if ! pactl list modules 2>/dev/null | grep -q 'Name: module-echo-cancel'; then
+    log "WARNING: module-echo-cancel does not appear to be available in this PulseAudio build"
+fi
+
 load_success=false
 
 # Method 1: WebRTC AEC (no aec_args — commas in aec_args break some pactl builds)
 if [ "$load_success" = false ]; then
-    if pactl load-module module-echo-cancel \
+    _out="$(pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
         source_name=echocancel_source \
         source_master="$MIC_SOURCE" \
         sink_master="$SPEAKER_SINK" \
-        aec_method=webrtc 2>/dev/null; then
+        aec_method=webrtc 2>&1)" || true
+    if echo "$_out" | grep -q '^[0-9]\+$'; then
         load_success=true
-        log "Echo cancel loaded: webrtc"
+        log "Echo cancel loaded: webrtc (module id: $_out)"
+    else
+        log "Echo cancel (webrtc) failed: $_out"
     fi
 fi
 
 # Method 2: Default AEC
 if [ "$load_success" = false ]; then
-    if pactl load-module module-echo-cancel \
+    _out="$(pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
         source_name=echocancel_source \
         source_master="$MIC_SOURCE" \
-        sink_master="$SPEAKER_SINK" 2>/dev/null; then
+        sink_master="$SPEAKER_SINK" 2>&1)" || true
+    if echo "$_out" | grep -q '^[0-9]\+$'; then
         load_success=true
-        log "Echo cancel loaded: default AEC"
+        log "Echo cancel loaded: default AEC (module id: $_out)"
+    else
+        log "Echo cancel (default) failed: $_out"
     fi
 fi
 
@@ -130,8 +140,15 @@ else
 fi
 
 # --- Load switch-on-connect for hot-plug ---
-if ! pactl list short modules 2>/dev/null | awk '$2=="module-switch-on-connect"{found=1} END{exit found?0:1}'; then
-    pactl load-module module-switch-on-connect 2>/dev/null || true
+if pactl list short modules 2>/dev/null | awk '$2=="module-switch-on-connect"{exit 0} END{exit 1}'; then
+    log "module-switch-on-connect already loaded — skipping"
+else
+    _soc_out="$(pactl load-module module-switch-on-connect 2>&1)" || true
+    if echo "$_soc_out" | grep -q '^[0-9]\+$'; then
+        log "Loaded module-switch-on-connect (module id: $_soc_out)"
+    else
+        log "module-switch-on-connect load skipped/failed: $_soc_out"
+    fi
 fi
 
 log "Audio autostart complete!"
