@@ -200,7 +200,7 @@ def _sd_notify(state: str):
         pass
 
 
-def health_watchdog(pipeline, loop):
+def health_watchdog(pipeline_ref, loop):
     """Background thread: exits process if pipeline stalls (no frames for HEALTH_TIMEOUT_SEC)."""
     while True:
         time.sleep(10)
@@ -212,7 +212,9 @@ def health_watchdog(pipeline, loop):
         else:
             err(f"HEALTH WATCHDOG: no frame for {elapsed:.0f}s (limit {HEALTH_TIMEOUT_SEC}s) — forcing restart")
             try:
-                pipeline.set_state(Gst.State.NULL)
+                p = pipeline_ref.get("p") if isinstance(pipeline_ref, dict) else pipeline_ref
+                if p is not None:
+                    p.set_state(Gst.State.NULL)
             except Exception:
                 pass
             try:
@@ -248,33 +250,64 @@ def on_new_sample(sink) -> Gst.FlowReturn:
 # ---------------------------------------------------------------------------
 # PulseAudio check
 # ---------------------------------------------------------------------------
-def has_echocancel() -> bool:
+def pulse_accessible() -> bool:
+    """Return True if pactl can talk to the configured PulseAudio server."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["pactl", "info"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def has_echocancel(*, quiet: bool = False) -> bool:
     """Check if PulseAudio echocancel_source is available, with retries."""
     import subprocess
 
-    log(f"  PulseAudio debug:")
-    log(f"    UID: {os.getuid()}")
-    log(f"    XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '<not set>')}")
-    log(f"    PULSE_SERVER: {os.environ.get('PULSE_SERVER', '<not set>')}")
-    log(f"    HOME: {os.environ.get('HOME', '<not set>')}")
+    if not quiet:
+        log("  PulseAudio debug:")
+        log(f"    UID: {os.getuid()}")
+        log(f"    XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '<not set>')}")
+        log(f"    PULSE_SERVER: {os.environ.get('PULSE_SERVER', '<not set>')}")
+        log(f"    HOME: {os.environ.get('HOME', '<not set>')}")
 
     for attempt in range(10):
         try:
+            if not pulse_accessible():
+                if not quiet:
+                    log(f"  PulseAudio: not reachable via pactl, retry {attempt + 1}/10...")
+                if attempt < 9:
+                    time.sleep(2)
+                continue
+
             result = subprocess.run(
                 ["pactl", "list", "short", "sources"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            log(f"    pactl exit={result.returncode} stdout='{result.stdout.strip()[:200]}' stderr='{result.stderr.strip()[:200]}'")
+            if not quiet:
+                log(
+                    "    pactl exit="
+                    f"{result.returncode} stdout='{result.stdout.strip()[:200]}' "
+                    f"stderr='{result.stderr.strip()[:200]}'"
+                )
             if "echocancel_source" in result.stdout:
                 return True
             if attempt < 9:
-                log(f"  PulseAudio: echocancel not found, retry {attempt + 1}/10...")
+                if not quiet:
+                    log(f"  PulseAudio: echocancel not found, retry {attempt + 1}/10...")
                 time.sleep(2)
         except Exception as e:
             if attempt < 9:
-                log(f"  PulseAudio: not ready ({e}), retry {attempt + 1}/10...")
+                if not quiet:
+                    log(f"  PulseAudio: not ready ({e}), retry {attempt + 1}/10...")
                 time.sleep(2)
     return False
 
@@ -359,7 +392,7 @@ def main() -> int:
     os.environ["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
     os.environ["PULSE_SERVER"] = f"unix:/run/user/{uid}/pulse/native"
 
-    with_audio = has_echocancel()
+    with_audio = has_echocancel(quiet=False)
     if with_audio:
         log("Audio: echocancel_source ✓")
     else:
@@ -371,25 +404,33 @@ def main() -> int:
 
     log(f"AI frames: SHM {SHM_PATH} (max {AI_MAX_FPS}fps, {AI_WIDTH}x{AI_HEIGHT} BGR)")
 
-    pipeline = build_pipeline(with_audio, mode=args.mode)
-    pipeline.set_state(Gst.State.PLAYING)
-    log("Pipeline PLAYING")
+    pipeline_ref: dict = {"p": None}
 
-    _sd_notify("READY=1")
+    def start_pipeline(with_audio_flag: bool) -> Gst.Pipeline:
+        p = build_pipeline(with_audio_flag, mode=args.mode)
+        p.set_state(Gst.State.PLAYING)
+        log("Pipeline PLAYING")
+        _sd_notify("READY=1")
+        touch_health()
+        return p
 
-    touch_health()
+    pipeline_ref["p"] = start_pipeline(with_audio)
 
     loop = GLib.MainLoop()
 
     def on_signal(sig, frame):
         log(f"Signal {sig} received, stopping...")
-        pipeline.set_state(Gst.State.NULL)
+        try:
+            if pipeline_ref.get("p") is not None:
+                pipeline_ref["p"].set_state(Gst.State.NULL)
+        except Exception:
+            pass
         loop.quit()
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
 
-    bus = pipeline.get_bus()
+    bus = pipeline_ref["p"].get_bus()
     bus.add_signal_watch()
 
     def on_bus_message(bus, msg):
@@ -399,11 +440,19 @@ def main() -> int:
             err(f"GStreamer error: {error.message}")
             if debug:
                 err(f"  Debug: {debug}")
-            pipeline.set_state(Gst.State.NULL)
+            try:
+                if pipeline_ref.get("p") is not None:
+                    pipeline_ref["p"].set_state(Gst.State.NULL)
+            except Exception:
+                pass
             loop.quit()
         elif t == Gst.MessageType.EOS:
             log("End of stream")
-            pipeline.set_state(Gst.State.NULL)
+            try:
+                if pipeline_ref.get("p") is not None:
+                    pipeline_ref["p"].set_state(Gst.State.NULL)
+            except Exception:
+                pass
             loop.quit()
         elif t == Gst.MessageType.WARNING:
             warning, debug = msg.parse_warning()
@@ -411,16 +460,56 @@ def main() -> int:
 
     bus.connect("message", on_bus_message)
 
-    wd = threading.Thread(target=health_watchdog, args=(pipeline, loop), daemon=True)
+    wd = threading.Thread(target=health_watchdog, args=(pipeline_ref, loop), daemon=True)
     wd.start()
     log(f"Health watchdog started (timeout={HEALTH_TIMEOUT_SEC}s)")
+
+    # If we started video-only, keep polling for echocancel to reappear after hotplug
+    # and rebuild the pipeline to include audio without requiring a manual restart.
+    audio_upgrade_done = {"done": with_audio}
+
+    def maybe_upgrade_audio():
+        if audio_upgrade_done["done"]:
+            return False  # remove timer
+
+        if has_echocancel(quiet=True):
+            log("Detected echocancel_source after start — rebuilding pipeline WITH audio")
+            try:
+                old = pipeline_ref.get("p")
+                if old is not None:
+                    try:
+                        old_bus = old.get_bus()
+                        old_bus.remove_signal_watch()
+                    except Exception:
+                        pass
+                    old.set_state(Gst.State.NULL)
+            except Exception:
+                pass
+
+            pipeline_ref["p"] = start_pipeline(True)
+            audio_upgrade_done["done"] = True
+
+            nb = pipeline_ref["p"].get_bus()
+            nb.add_signal_watch()
+            nb.connect("message", on_bus_message)
+
+            return False  # remove timer
+
+        return True  # keep timer
+
+    if not with_audio:
+        GLib.timeout_add_seconds(2, maybe_upgrade_audio)
 
     try:
         loop.run()
     except Exception as e:
         err(f"Main loop error: {e}")
     finally:
-        pipeline.set_state(Gst.State.NULL)
+        try:
+            if pipeline_ref.get("p") is not None:
+                pipeline_ref["p"].set_state(Gst.State.NULL)
+        except Exception:
+            pass
         close_shm_writer()
         log("Pipeline stopped")
 
