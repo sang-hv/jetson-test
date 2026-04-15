@@ -134,6 +134,9 @@ class HospitalPipeline:
                 raise RuntimeError(f"Failed to open video source: {self.config.source}")
 
         if self.config.display_enabled:
+            window_name = "Hospital — Fall Detection"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, self.config.cam_width, self.config.cam_height)
             print("\n[Pipeline] Running... Press 'q' to quit\n")
         else:
             print("\n[Pipeline] Running in headless mode (no OpenCV window)\n")
@@ -154,7 +157,7 @@ class HospitalPipeline:
                 annotated_frame = self._process_frame(frame)
 
                 if self.config.display_enabled:
-                    cv2.imshow("Hospital — Fall Detection", annotated_frame)
+                    cv2.imshow(window_name, annotated_frame)
                     if (cv2.waitKey(1) & 0xFF) == ord("q"):
                         print("[Pipeline] Quit requested")
                         break
