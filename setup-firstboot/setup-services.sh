@@ -168,14 +168,14 @@ else
     VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
-REQ_FILE="$SCRIPT_DIR/../src/requirements.txt"
-step "Install Python dependencies"
-if [ -d "$VENV_DIR" ] && [ -f "$REQ_FILE" ]; then
-    run_stream "$VENV_DIR/bin/pip" install -r "$REQ_FILE"
-    log "Python deps installed from $REQ_FILE"
-else
-    warn "Skipping pip install (missing venv or $REQ_FILE). VENV_DIR='$VENV_DIR'"
-fi
+# REQ_FILE="$SCRIPT_DIR/../src/requirements.txt"
+# step "Install Python dependencies"
+# if [ -d "$VENV_DIR" ] && [ -f "$REQ_FILE" ]; then
+#     run_stream "$VENV_DIR/bin/pip" install -r "$REQ_FILE"
+#     log "Python deps installed from $REQ_FILE"
+# else
+#     warn "Skipping pip install (missing venv or $REQ_FILE). VENV_DIR='$VENV_DIR'"
+# fi
 
 step "Phase 1/11: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
