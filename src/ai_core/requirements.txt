@@ -1,5 +1,6 @@
-# Face Recognition System - Dependencies
-# Install with: pip install -r requirements.txt
+# DEPRECATED: Use /src/requirements.txt instead.
+#
+# Kept for backward compatibility with older deploy scripts/tools.
 
 # Core ML frameworks
 ultralytics>=8.3.0          # YOLO v11 + ByteTrack (person detection + tracking)
@@ -16,6 +17,3 @@ onnxruntime>=1.16.0         # For CPU-only systems (including macOS)
 numpy==1.26.4               # Array operations
 Pillow>=10.0.0              # Image loading for database
 
-# Note: Models download automatically on first run:
-# - YOLO: ~6MB (yolo11n.pt)
-# - InsightFace: ~326MB (buffalo_l to ~/.insightface/models/)

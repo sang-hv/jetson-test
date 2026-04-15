@@ -168,6 +168,15 @@ else
     VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
+REQ_FILE="$SCRIPT_DIR/../src/requirements.txt"
+step "Install Python dependencies"
+if [ -d "$VENV_DIR" ] && [ -f "$REQ_FILE" ]; then
+    run_stream "$VENV_DIR/bin/pip" install -r "$REQ_FILE"
+    log "Python deps installed from $REQ_FILE"
+else
+    warn "Skipping pip install (missing venv or $REQ_FILE). VENV_DIR='$VENV_DIR'"
+fi
+
 step "Phase 1/11: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
 cp "$SCRIPT_DIR/config/go2rtc.yaml" /etc/go2rtc/go2rtc.yaml
@@ -290,8 +299,6 @@ chmod +x /opt/person_count_ws/start.sh
 
 cp "$SCRIPT_DIR/stream_auth/server.py" /opt/stream_auth/server.py
 
-run_stream pip3 install websockets pyzmq
-
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/backchannel.service" \
     > /etc/systemd/system/backchannel.service
 sed "s/__USER__/$ACTUAL_USER/" "$SCRIPT_DIR/services/person-count-ws.service" \
@@ -403,9 +410,6 @@ if [ -d "$LOGIC_SRC" ]; then
         warn "Logic Service .env copied from .env.example — sync-config will fill SQS values"
     fi
     # Install Python deps into shared venv
-    if [ -d "$VENV_DIR" ]; then
-        run_stream "$VENV_DIR/bin/pip" install -r "$LOGIC_SRC/requirements.txt"
-    fi
     cp "$SCRIPT_DIR/services/logic-service.service" /etc/systemd/system/logic-service.service
     systemctl daemon-reload
     systemctl enable logic-service.service
