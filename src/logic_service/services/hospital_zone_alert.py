@@ -26,9 +26,7 @@ async def process_fall_detected_alert(payload: FallDetectedPayload) -> dict:
             detection_image_url=det.detection_result,
             confidence=det.confidence,
             object_attributes={
-                "event": "fall_detected",
-                "track_id": det.track_id,
-                "bbox": det.bbox,
+                "position": "unexpected_incident"
             },
         )
         processed += 1
