@@ -203,7 +203,9 @@ mkdir -p /data/mini-pc/db
 # Detection results directory (served by nginx at /detection/)
 # Use a shared-dir permission model so any service user can write images.
 mkdir -p /detection
-chmod 755 -R /detection/
+# 1777: world-writable with sticky bit (like /tmp) so services running as
+# different users can create files while preventing cross-user deletion.
+chmod 1777 -R /detection/
 
 if [ "$FORCE_DEVICE_ENV" = "1" ]; then
     if [ -z "$DEVICE_ID" ] || [ -z "$BACKEND_URL" ] || [ -z "$SECRET_KEY" ]; then
