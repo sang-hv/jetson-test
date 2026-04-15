@@ -83,42 +83,30 @@ fi
 
 # --- Load echo cancel module ---
 log "Loading echo cancel module..."
-pactl unload-module module-echo-cancel 2>/dev/null || true
+# Unload any existing echo-cancel instances (by module name)
+while read -r _mid; do
+    [ -n "$_mid" ] && pactl unload-module "$_mid" 2>/dev/null || true
+done < <(pactl list short modules 2>/dev/null | awk '$2=="module-echo-cancel"{print $1}')
 
 SPEAKER_SINK="${USB_SINK:-$(pactl get-default-sink)}"
 MIC_SOURCE="${USB_SOURCE:-$(pactl get-default-source)}"
 
 load_success=false
 
-# Method 1: WebRTC AEC - disable noise suppression + gain control to avoid artifacts
+# Method 1: WebRTC AEC (no aec_args — commas in aec_args break some pactl builds)
 if [ "$load_success" = false ]; then
     if pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
         source_name=echocancel_source \
         source_master="$MIC_SOURCE" \
         sink_master="$SPEAKER_SINK" \
-        aec_method=webrtc \
-        aec_args="analog_gain_control=0 digital_gain_control=0 noise_suppression=0 extended_filter=1" 2>/dev/null; then
+        aec_method=webrtc 2>/dev/null; then
         load_success=true
-        log "Echo cancel loaded: webrtc AEC (no NS/AGC)"
+        log "Echo cancel loaded: webrtc"
     fi
 fi
 
-# Method 2: WebRTC AEC with only echo cancellation (no noise suppression)
-if [ "$load_success" = false ]; then
-    if pactl load-module module-echo-cancel \
-        sink_name=echocancel_sink \
-        source_name=echocancel_source \
-        source_master="$MIC_SOURCE" \
-        sink_master="$SPEAKER_SINK" \
-        aec_method=webrtc \
-        aec_args="analog_gain_control=0 digital_gain_control=0" 2>/dev/null; then
-        load_success=true
-        log "Echo cancel loaded: webrtc (no AGC)"
-    fi
-fi
-
-# Method 3: Default AEC
+# Method 2: Default AEC
 if [ "$load_success" = false ]; then
     if pactl load-module module-echo-cancel \
         sink_name=echocancel_sink \
@@ -142,6 +130,8 @@ else
 fi
 
 # --- Load switch-on-connect for hot-plug ---
-pactl load-module module-switch-on-connect 2>/dev/null || true
+if ! pactl list short modules 2>/dev/null | awk '$2=="module-switch-on-connect"{found=1} END{exit found?0:1}'; then
+    pactl load-module module-switch-on-connect 2>/dev/null || true
+fi
 
 log "Audio autostart complete!"
