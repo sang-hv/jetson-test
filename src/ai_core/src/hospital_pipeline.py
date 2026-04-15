@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from .detection_saver import DetectionImageSaver
 from .fall_detector import FallDetector
 from .utils import FPSCounter, draw_detection_zone, draw_info_overlay
 from .zmq_publisher import ZMQPublisher
@@ -44,6 +45,7 @@ class HospitalPipeline:
 
         self.fall_detector = FallDetector(model_path=config.pose_model_path)
         self.zmq_publisher = ZMQPublisher(port=config.zmq_publish_port)
+        self.detection_saver = DetectionImageSaver(base_dir=config.detection_image_dir)
         self.fps_counter = FPSCounter()
 
         print("-" * 60)
@@ -105,12 +107,17 @@ class HospitalPipeline:
 
         for ev in fall_events:
             x1, y1, x2, y2 = ev["bbox"]
+            full_bbox = [x1 + zone_offset_x, y1 + zone_offset_y,
+                         x2 + zone_offset_x, y2 + zone_offset_y]
+            detection_result = self.detection_saver.save_frame_with_box(
+                frame, full_bbox, "fall_detected", ev["track_id"], "Unknown",
+            )
             ev_full = {
                 "track_id": ev["track_id"],
-                "bbox": [x1 + zone_offset_x, y1 + zone_offset_y,
-                         x2 + zone_offset_x, y2 + zone_offset_y],
+                "bbox": full_bbox,
+                "detection_result": detection_result,
             }
-            print(f"[Hospital] FALL CONFIRMED — track #{ev['track_id']}")
+            print(f"[Hospital] FALL CONFIRMED — track #{ev['track_id']} → {detection_result}")
             self.zmq_publisher.send_fall_detected({
                 "timestamp": ev["timestamp"],
                 "detections": [ev_full],
