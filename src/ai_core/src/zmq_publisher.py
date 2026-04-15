@@ -46,6 +46,9 @@ class ZMQPublisher:
     # PPE violation alert topic (enterprise only)
     PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
 
+    # Fall detection topic (hospital pipeline only)
+    FALL_DETECTED_TOPIC = b"fall_detected"
+
     def __init__(self, port: int = 5555) -> None:
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.PUB)
@@ -168,6 +171,16 @@ class ZMQPublisher:
             pass
         except Exception as exc:
             logger.warning(f"ZMQPublisher mask alert send failed: {exc}")
+
+    def send_fall_detected(self, data: dict) -> None:
+        """Serialize data as JSON and publish with the fall_detected topic prefix."""
+        try:
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self._socket.send_multipart([self.FALL_DETECTED_TOPIC, payload], flags=zmq.NOBLOCK)
+        except zmq.Again:
+            pass
+        except Exception as exc:
+            logger.warning(f"ZMQPublisher fall detected send failed: {exc}")
 
     def close(self) -> None:
         """Release ZMQ resources."""

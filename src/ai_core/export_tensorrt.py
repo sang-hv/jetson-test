@@ -29,6 +29,7 @@ from ultralytics import YOLO
 
 DEFAULT_MODELS = [
     "yolo11l.pt",
+    "yolo11l-pose.pt",
     "yolov8n-face-mask.pt",
     "yolov8m-protective-equipment-detection.pt",
 ]

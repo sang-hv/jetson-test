@@ -33,8 +33,10 @@ from pydantic import ValidationError
 from database.connection import close_db, get_db, init_db
 from schemas.enterprise_models import EmployeeCrossingPayload, PPEViolationAlertPayload, RestrictedZoneAlertPayload
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
+from schemas.hospital_models import FallDetectedPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
+from services.hospital_zone_alert import process_fall_detected_alert
 from services.shop_zone_alert import process_shop_zone_sqs_event
 from services.enterprise_zone_alert import process_employee_crossing_alert, process_restricted_alert, process_ppe_violation_alert
 
@@ -59,6 +61,9 @@ ZMQ_ZONE_EXIT_TOPIC = b"zone_exit"
 ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
 ZMQ_RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
 ZMQ_PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
+
+# hospital topics
+ZMQ_FALL_DETECTED_TOPIC = b"fall_detected"
 
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
@@ -96,11 +101,13 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PPE_VIOLATION_ALERT_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_FALL_DETECTED_TOPIC)
     all_topics = [
         ZMQ_TOPIC, ZMQ_STRANGER_TOPIC, ZMQ_PASSERBY_TOPIC,
         ZMQ_ANIMAL_TOPIC, ZMQ_PERSON_COUNT_TOPIC,
         ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC,
         ZMQ_EMPLOYEE_CROSSING_TOPIC, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC,
+        ZMQ_PPE_VIOLATION_ALERT_TOPIC, ZMQ_FALL_DETECTED_TOPIC,
     ]
     logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics={[t.decode() for t in all_topics]}")
 
@@ -152,6 +159,13 @@ async def _zmq_subscriber_loop() -> None:
                     else:
                         # Family-only topics — ignore for Store cameras.
                         handled = False
+                elif facility == "Hospital":
+                    if topic == ZMQ_FALL_DETECTED_TOPIC:
+                        payload = FallDetectedPayload.model_validate_json(raw)
+                        await process_fall_detected_alert(payload)
+                        handled = True
+                    else:
+                        handled = False
                 elif facility == "Enterprise":
                     if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
                         payload = EmployeeCrossingPayload.model_validate_json(raw)
@@ -168,9 +182,9 @@ async def _zmq_subscriber_loop() -> None:
                     else:
                         handled = False
                 else:
-                    # Only run Family/Store/Enterprise pipelines as requested.
+                    # Only run Family/Store/Enterprise/Hospital pipelines as requested.
                     logger.warning(
-                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise' (got {facility!r}) — skipping"
+                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise'/'Hospital' (got {facility!r}) — skipping"
                     )
                     continue
 
