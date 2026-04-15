@@ -10,6 +10,7 @@
 #    - Face embeddings          → SQLite face_embeddings table (API 2, paginated)
 #
 #  API 1: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/config
+#    Optional: data.git_url — if a valid remote URL and differs from origin, updates git remote.
 #  API 2: GET {BACKEND_URL}/api/v1/cameras/{DEVICE_ID}/face-embeddings?page=N&per_page=50
 #
 #  Usage:
@@ -28,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +164,119 @@ def call_api(url: str, label: str = "API") -> dict:
     return resp.get("data", {})
 
 
+def is_plausible_git_remote_url(raw: str) -> bool:
+    """True if value looks like a real git remote (https/ssh/git/git@), not a placeholder."""
+    u = (raw or "").strip()
+    if len(u) < 8:
+        return False
+    # Backend placeholders (e.g. 32 zeros) or long hex-only strings
+    if re.fullmatch(r"[0-9a-fA-F]{20,}", u):
+        return False
+    if re.fullmatch(r"0+", u):
+        return False
+    if any(c in u for c in (" ", "\n", "\r", "`", "$", "(", ")")):
+        return False
+
+    if u.startswith("git@"):
+        rest = u[4:]
+        if ":" not in rest:
+            return False
+        host, _, path = rest.partition(":")
+        if not host or not path or ".." in path:
+            return False
+        if path.startswith("/") and not path.startswith("/~"):
+            return False
+        return True
+
+    try:
+        p = urlparse(u)
+    except Exception:
+        return False
+
+    if p.scheme in ("https", "http"):
+        return bool(p.netloc) and ".." not in u
+
+    if p.scheme == "ssh":
+        return bool(p.netloc or (p.path and len(p.path) > 1))
+
+    if p.scheme == "git":
+        return bool(p.netloc)
+
+    return False
+
+
+def sync_git_remote_from_config(config: dict) -> None:
+    """If API returns a valid git_url different from origin, run git remote set-url/add."""
+    raw = config.get("git_url")
+    if raw is None:
+        return
+    if not isinstance(raw, str):
+        warn("git_url is not a string — skipping")
+        return
+    url = raw.strip()
+    if not url:
+        return
+    if not is_plausible_git_remote_url(url):
+        warn(f"git_url is not a valid git remote — skipping: {url[:100]!r}")
+        return
+
+    marker = Path("/etc/device/repo-path")
+    if not marker.exists():
+        log("No /etc/device/repo-path — skipping git_url")
+        return
+
+    setup_firstboot = marker.read_text().strip().rstrip("/")
+    work_dir = Path(setup_firstboot)
+    if not work_dir.is_dir():
+        warn(f"repo-path is not a directory ({work_dir}) — skipping git_url")
+        return
+
+    top = subprocess.run(
+        ["git", "-C", str(work_dir), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if top.returncode != 0:
+        warn(f"repo-path is not inside a git repo — skipping git_url: {top.stderr.strip()}")
+        return
+
+    git_root = Path(top.stdout.strip())
+    cur = subprocess.run(
+        ["git", "-C", str(git_root), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+    )
+    current = (cur.stdout or "").strip() if cur.returncode == 0 else ""
+
+    if current == url:
+        log("git_url matches git remote origin — unchanged")
+        return
+
+    log(f"git remote origin update: {current!r} → {url!r}")
+
+    if cur.returncode != 0:
+        add = subprocess.run(
+            ["git", "-C", str(git_root), "remote", "add", "origin", url],
+            capture_output=True,
+            text=True,
+        )
+        if add.returncode != 0:
+            err(f"git remote add origin failed: {add.stderr.strip()}")
+            return
+        log("git remote add origin OK")
+        return
+
+    setu = subprocess.run(
+        ["git", "-C", str(git_root), "remote", "set-url", "origin", url],
+        capture_output=True,
+        text=True,
+    )
+    if setu.returncode != 0:
+        err(f"git remote set-url origin failed: {setu.stderr.strip()}")
+        return
+    log("git remote set-url origin OK")
+
+
 # ---------------------------------------------------------------------------
 # API 1: Device config (settings, rules, detection zones)
 # ---------------------------------------------------------------------------
@@ -173,6 +288,8 @@ if not data:
     err("API 1 (config) failed — aborting")
     sys.exit(1)
 log("API 1 (config) OK")
+
+sync_git_remote_from_config(data)
 
 # ---------------------------------------------------------------------------
 # Save previous config for diff (cloudflare token change detection)
