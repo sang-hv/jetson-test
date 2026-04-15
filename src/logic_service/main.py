@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from database.connection import close_db, get_db, init_db
 from schemas.enterprise_models import EmployeeCrossingPayload, PPEViolationAlertPayload, RestrictedZoneAlertPayload
 from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, PasserbyEventPayload, StrangerAlertPayload
+from schemas.hospital_models import FallDetectedPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
 from services.shop_zone_alert import process_shop_zone_sqs_event
@@ -159,8 +160,9 @@ async def _zmq_subscriber_loop() -> None:
                         handled = False
                 elif facility == "Hospital":
                     if topic == ZMQ_FALL_DETECTED_TOPIC:
-                        print(f"[fall_detected] {raw}")
-                        logger.info(f"[fall_detected] {raw}")
+                        payload = FallDetectedPayload.model_validate_json(raw)
+                        print(f"[fall_detected] {payload!r}")
+                        logger.info(f"[fall_detected] {payload!r}")
                         handled = True
                     else:
                         handled = False
