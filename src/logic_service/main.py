@@ -60,6 +60,9 @@ ZMQ_EMPLOYEE_CROSSING_TOPIC = b"employee_crossing"
 ZMQ_RESTRICTED_ZONE_ALERT_TOPIC = b"restricted_zone_alert"
 ZMQ_PPE_VIOLATION_ALERT_TOPIC = b"ppe_violation_alert"
 
+# hospital topics
+ZMQ_FALL_DETECTED_TOPIC = b"fall_detected"
+
 DB_PATH = os.getenv("LOGIC_DB_PATH", "logic_service.db")
 
 _zmq_task: asyncio.Task | None = None
@@ -96,11 +99,13 @@ async def _zmq_subscriber_loop() -> None:
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_EMPLOYEE_CROSSING_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC)
     socket.setsockopt(zmq.SUBSCRIBE, ZMQ_PPE_VIOLATION_ALERT_TOPIC)
+    socket.setsockopt(zmq.SUBSCRIBE, ZMQ_FALL_DETECTED_TOPIC)
     all_topics = [
         ZMQ_TOPIC, ZMQ_STRANGER_TOPIC, ZMQ_PASSERBY_TOPIC,
         ZMQ_ANIMAL_TOPIC, ZMQ_PERSON_COUNT_TOPIC,
         ZMQ_ZONE_ENTRY_TOPIC, ZMQ_ZONE_EXIT_TOPIC,
         ZMQ_EMPLOYEE_CROSSING_TOPIC, ZMQ_RESTRICTED_ZONE_ALERT_TOPIC,
+        ZMQ_PPE_VIOLATION_ALERT_TOPIC, ZMQ_FALL_DETECTED_TOPIC,
     ]
     logger.info(f"ZMQ subscriber connected to {ZMQ_SUB_ADDRESS}, topics={[t.decode() for t in all_topics]}")
 
@@ -152,6 +157,13 @@ async def _zmq_subscriber_loop() -> None:
                     else:
                         # Family-only topics — ignore for Store cameras.
                         handled = False
+                elif facility == "Hospital":
+                    if topic == ZMQ_FALL_DETECTED_TOPIC:
+                        print(f"[fall_detected] {raw}")
+                        logger.info(f"[fall_detected] {raw}")
+                        handled = True
+                    else:
+                        handled = False
                 elif facility == "Enterprise":
                     if topic == ZMQ_EMPLOYEE_CROSSING_TOPIC:
                         payload = EmployeeCrossingPayload.model_validate_json(raw)
@@ -168,9 +180,9 @@ async def _zmq_subscriber_loop() -> None:
                     else:
                         handled = False
                 else:
-                    # Only run Family/Store/Enterprise pipelines as requested.
+                    # Only run Family/Store/Enterprise/Hospital pipelines as requested.
                     logger.warning(
-                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise' (got {facility!r}) — skipping"
+                        f"camera_settings.facility is not set to 'Family'/'Store'/'Enterprise'/'Hospital' (got {facility!r}) — skipping"
                     )
                     continue
 

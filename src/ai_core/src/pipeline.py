@@ -57,6 +57,9 @@ class Config:
     insightface_model: str = "buffalo_l"
     det_size: Tuple[int, int] = field(default=(640, 640))
 
+    # Pose model used by the hospital pipeline (fall detection)
+    pose_model_path: str = "yolo11n-pose.pt"
+
     # Mask detection settings (loaded from .env)
     mask_detection_enabled: bool = False
     mask_confidence_threshold: float = 0.5
@@ -260,6 +263,9 @@ class Config:
         # Parse pipeline type from .env
         pipeline_type = env_vars.get("PIPELINE_TYPE", "home").lower()
 
+        # Pose model for hospital pipeline (fall detection)
+        pose_model_path = env_vars.get("POSE_MODEL_PATH", "yolo11n-pose.pt")
+
         config = cls(
             source=str(args.source),
             known_dir=args.known_dir,
@@ -319,6 +325,8 @@ class Config:
             restricted_zone=restricted_zone,
             # Pipeline type from .env
             pipeline_type=pipeline_type,
+            # Pose model for hospital pipeline
+            pose_model_path=pose_model_path,
         )
 
         # Optimize for CPU inference
@@ -342,8 +350,8 @@ class Config:
             raise ValueError(f"min_confirm_frames must be >= 1")
         if self.recognize_interval_ms < 0:
             raise ValueError(f"recognize_interval_ms must be >= 0")
-        if self.pipeline_type not in ("home", "shop", "enterprise"):
-            raise ValueError(f"pipeline_type must be 'home', 'shop', or 'enterprise', got {self.pipeline_type}")
+        if self.pipeline_type not in ("home", "shop", "enterprise", "hospital"):
+            raise ValueError(f"pipeline_type must be 'home', 'shop', 'enterprise', or 'hospital', got {self.pipeline_type}")
         if self.video_source_type not in ("opencv", "zmq", "shm"):
             raise ValueError(
                 f"video_source_type must be opencv, zmq, or shm, got {self.video_source_type}"
@@ -358,6 +366,9 @@ def create_pipeline(config: Config):
     elif config.pipeline_type == "enterprise":
         from .enterprise_pipeline import EnterprisePipeline
         return EnterprisePipeline(config)
+    elif config.pipeline_type == "hospital":
+        from .hospital_pipeline import HospitalPipeline
+        return HospitalPipeline(config)
     else:
         from .home_pipeline import HomePipeline
         return HomePipeline(config)
