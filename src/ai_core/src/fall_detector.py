@@ -49,7 +49,7 @@ class FallDetector:
         hip_velocity_thresh: float = 0.08,
         head_hip_ratio_thresh: float = 0.15,
         queue_size: int = 10,
-        fall_confirm_frames: int = 8,
+        fall_confirm_frames: int = 5,
         recovery_frames: int = 15,
         alert_cooldown_sec: float = 30.0,
     ) -> None:

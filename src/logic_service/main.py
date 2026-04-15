@@ -36,6 +36,7 @@ from schemas.family_models import AnimalAlertPayload, CrossingEventPayload, Pass
 from schemas.hospital_models import FallDetectedPayload
 from schemas.shop_models import ShopPersonEventPayload
 from services.family_zone_alert import process_animal_alert, process_event, process_passerby_event, process_stranger_alert
+from services.hospital_zone_alert import process_fall_detected_alert
 from services.shop_zone_alert import process_shop_zone_sqs_event
 from services.enterprise_zone_alert import process_employee_crossing_alert, process_restricted_alert, process_ppe_violation_alert
 
@@ -161,8 +162,7 @@ async def _zmq_subscriber_loop() -> None:
                 elif facility == "Hospital":
                     if topic == ZMQ_FALL_DETECTED_TOPIC:
                         payload = FallDetectedPayload.model_validate_json(raw)
-                        print(f"[fall_detected] {payload!r}")
-                        logger.info(f"[fall_detected] {payload!r}")
+                        await process_fall_detected_alert(payload)
                         handled = True
                     else:
                         handled = False
