@@ -41,7 +41,7 @@ TCP_PORT = 8553
 
 AI_WIDTH = 1920
 AI_HEIGHT = 1080
-AI_MAX_FPS = 5
+AI_MAX_FPS = 10
 
 # Shared memory backing file path.
 # Accept legacy STREAM_SHM_NAME (/mini_pc_ai_frames) and normalize to /dev/shm/<name>.bin
