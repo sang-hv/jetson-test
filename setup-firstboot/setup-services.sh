@@ -169,8 +169,48 @@ fi
 step "Install Python dependencies (global)"
 REQ_FILE="$SCRIPT_DIR/../src/requirements.lock.txt"
 if [ -f "$REQ_FILE" ]; then
-    run_stream pip3 install -r "$REQ_FILE"
-    log "Python deps installed from $REQ_FILE (global)"
+    pip_lock_satisfied() {
+        # Return 0 if all pinned requirements are already satisfied.
+        # Supports lines:
+        # - name==version
+        # - name @ file:///... (only checks that name is installed)
+        local line name pinned installed
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%%#*}"
+            line="$(echo "$line" | xargs 2>/dev/null || true)"
+            [ -z "$line" ] && continue
+
+            if echo "$line" | grep -q " @ "; then
+                name="${line%% @ *}"
+                name="$(echo "$name" | xargs 2>/dev/null || true)"
+                if ! pip3 show "$name" >/dev/null 2>&1; then
+                    return 1
+                fi
+                continue
+            fi
+
+            if echo "$line" | grep -q "=="; then
+                name="${line%%==*}"
+                pinned="${line#*==}"
+                installed="$(pip3 show "$name" 2>/dev/null | awk '/^Version:/{print $2}' | head -n1)"
+                if [ -z "$installed" ] || [ "$installed" != "$pinned" ]; then
+                    return 1
+                fi
+                continue
+            fi
+
+            # Unknown spec format → force install to be safe
+            return 1
+        done < "$REQ_FILE"
+        return 0
+    }
+
+    if pip_lock_satisfied; then
+        log "Python deps already satisfied — skipping pip install ($REQ_FILE)"
+    else
+        run_stream pip3 install -r "$REQ_FILE"
+        log "Python deps installed from $REQ_FILE (global)"
+    fi
 else
     warn "Missing $REQ_FILE — skipping pip install"
 fi
