@@ -167,7 +167,7 @@ else
 fi
 
 step "Install Python dependencies (global)"
-REQ_FILE="$SCRIPT_DIR/../src/requirements.txt"
+REQ_FILE="$SCRIPT_DIR/../src/requirements.lock.txt"
 if [ -f "$REQ_FILE" ]; then
     run_stream pip3 install -r "$REQ_FILE"
     log "Python deps installed from $REQ_FILE (global)"

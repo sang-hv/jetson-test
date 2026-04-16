@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import re
 import shutil
 import sqlite3
@@ -489,6 +490,19 @@ if raw_retention_days is not None:
 # Also extract from information block
 info: dict = data.get("information", {})
 if info:
+    # Persist camera name for display. If backend doesn't provide a name,
+    # generate a stable default once and reuse it on subsequent sync runs.
+    raw_name = info.get("name") if isinstance(info, dict) else None
+    camera_name = (raw_name or "").strip() if isinstance(raw_name, str) else ""
+    if not camera_name:
+        row = db.execute(
+            "SELECT value FROM camera_settings WHERE key = ?",
+            ("camera_name",),
+        ).fetchone()
+        existing = (row[0] or "").strip() if row and row[0] else ""
+        camera_name = existing or f"Avis camera AI {random.randint(100, 999)}"
+    settings_map["camera_name"] = camera_name
+
     if info.get("bluetooth_password"):
         settings_map["bluetooth_password"] = info["bluetooth_password"]
 
