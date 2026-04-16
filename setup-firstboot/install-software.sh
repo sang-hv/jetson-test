@@ -98,19 +98,15 @@ log "Removed tracker-miner-fs (file indexer) and apport (crash reporter)"
 step "Phase 2/8: Storage and directories"
 if [ -d /data ]; then
     DATA_DIR="/data/mini-pc"
-    VENV_DIR="/data/venv/mini-pc"
     log "SSD detected at /data — using SSD"
     chown -R "$ACTUAL_USER:$ACTUAL_USER" /data
     sudo -u "$ACTUAL_USER" mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
-    sudo -u "$ACTUAL_USER" mkdir -p /data/venv
 else
     DATA_DIR="$ACTUAL_HOME/data"
-    VENV_DIR="$ACTUAL_HOME/.venv"
     warn "No SSD at /data — using home directory"
     sudo -u "$ACTUAL_USER" mkdir -p "$DATA_DIR"/{db,media,faces,logs,models}
 fi
 log "Data dir: $DATA_DIR"
-log "Venv dir: $VENV_DIR"
 
 step "Phase 3/8: Swap and performance"
 if [ ! -f /swapfile ]; then
@@ -132,13 +128,7 @@ log "User $ACTUAL_USER added to required groups"
 
 step "Phase 4/8: Python environment"
 run_stream pip3 install jetson-stats || warn "jetson-stats install failed"
-sudo -u "$ACTUAL_USER" python3 -m venv "$VENV_DIR" 2>/dev/null || true
-if [ -f "$VENV_DIR/bin/pip" ]; then
-    run_stream sudo -u "$ACTUAL_USER" "$VENV_DIR/bin/pip" install --upgrade pip
-    log "Python venv created: $VENV_DIR"
-else
-    warn "Python venv creation failed"
-fi
+run_stream pip3 install --upgrade pip || warn "pip upgrade failed"
 
 step "Phase 5/8: AI / TensorRT packages"
 # Pin TensorRT to 10.3.0 — .engine files are NOT compatible across major versions.

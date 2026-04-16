@@ -162,20 +162,18 @@ fi
 # Recompute data paths for deployment summary
 if [ -d /data ]; then
     DATA_DIR="/data/mini-pc"
-    VENV_DIR="/data/venv/mini-pc"
 else
     DATA_DIR="$ACTUAL_HOME/data"
-    VENV_DIR="$ACTUAL_HOME/.venv"
 fi
 
-# REQ_FILE="$SCRIPT_DIR/../src/requirements.txt"
-# step "Install Python dependencies"
-# if [ -d "$VENV_DIR" ] && [ -f "$REQ_FILE" ]; then
-#     run_stream "$VENV_DIR/bin/pip" install -r "$REQ_FILE"
-#     log "Python deps installed from $REQ_FILE"
-# else
-#     warn "Skipping pip install (missing venv or $REQ_FILE). VENV_DIR='$VENV_DIR'"
-# fi
+step "Install Python dependencies (global)"
+REQ_FILE="$SCRIPT_DIR/../src/requirements.lock.txt"
+if [ -f "$REQ_FILE" ]; then
+    run_stream pip3 install -r "$REQ_FILE"
+    log "Python deps installed from $REQ_FILE (global)"
+else
+    warn "Missing $REQ_FILE — skipping pip install"
+fi
 
 step "Phase 1/11: go2rtc stream services"
 mkdir -p /etc/go2rtc /opt/stream
@@ -394,28 +392,19 @@ else
 fi
 
 step "Phase 10/11: Logic Service (ZMQ + FastAPI)"
-LOGIC_SRC="$SCRIPT_DIR/../src/logic_service"
-LOGIC_DST="/opt/logic_service"
-mkdir -p "$LOGIC_DST"
+LOGIC_SRC="$(cd "$SCRIPT_DIR/../src/logic_service" 2>/dev/null && pwd)"
 if [ -d "$LOGIC_SRC" ]; then
-    cp -r "$LOGIC_SRC/main.py"    "$LOGIC_DST/"
-    cp -r "$LOGIC_SRC/database"   "$LOGIC_DST/"
-    cp -r "$LOGIC_SRC/schemas"    "$LOGIC_DST/"
-    cp -r "$LOGIC_SRC/services"   "$LOGIC_DST/"
-    # Always deploy .env.example (used by sync-config.py as template)
-    [ -f "$LOGIC_SRC/.env.example" ] && cp "$LOGIC_SRC/.env.example" "$LOGIC_DST/.env.example"
-    # Install .env: use source .env if present, otherwise keep existing or copy from .env.example
-    if [ -f "$LOGIC_SRC/.env" ]; then
-        cp "$LOGIC_SRC/.env" "$LOGIC_DST/.env"
-    elif [ ! -f "$LOGIC_DST/.env" ] && [ -f "$LOGIC_SRC/.env.example" ]; then
-        cp "$LOGIC_SRC/.env.example" "$LOGIC_DST/.env"
+    # Ensure .env exists (sync-config.py will manage SQS values)
+    if [ ! -f "$LOGIC_SRC/.env" ] && [ -f "$LOGIC_SRC/.env.example" ]; then
+        cp "$LOGIC_SRC/.env.example" "$LOGIC_SRC/.env"
         warn "Logic Service .env copied from .env.example — sync-config will fill SQS values"
     fi
-    # Install Python deps into shared venv
-    cp "$SCRIPT_DIR/services/logic-service.service" /etc/systemd/system/logic-service.service
+
+    sed -e "s|__LOGIC_DIR__|$LOGIC_SRC|" \
+        "$SCRIPT_DIR/services/logic-service.service" > /etc/systemd/system/logic-service.service
     systemctl daemon-reload
     systemctl enable logic-service.service
-    log "Logic Service deployed → $LOGIC_DST"
+    log "Logic Service runs in-place → $LOGIC_SRC"
 else
     warn "Logic Service source not found at $LOGIC_SRC — skipping"
 fi
@@ -428,10 +417,6 @@ if [ -d "$AI_SRC" ]; then
         cp "$AI_SRC/.env.example" "$AI_SRC/.env"
         warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
     fi
-    # Install Python deps into shared venv
-    # if [ -d "$VENV_DIR" ] && [ -f "$AI_SRC/requirements.txt" ]; then
-    #     "$VENV_DIR/bin/pip" install -q -r "$AI_SRC/requirements.txt" 2>&1 | tail -3 | tee -a "$LOG_FILE"
-    # fi
     # Generate service file with actual source path
     sed "s|__AI_CORE_DIR__|$AI_SRC|" "$SCRIPT_DIR/services/ai-core.service" \
         > /etc/systemd/system/ai-core.service
@@ -445,7 +430,6 @@ fi
 echo ""
 echo "  Storage:"
 echo "    Data dir:    $DATA_DIR"
-echo "    Python venv: $VENV_DIR"
 echo "    Device env:  /etc/device/device.env"
 echo "    Config:      /etc/device/config.json"
 echo ""

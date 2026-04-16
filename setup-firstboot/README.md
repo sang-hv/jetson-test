@@ -103,7 +103,7 @@ sudo reboot
 ```
 
 `master-setup.sh` runs two phases:
-1. **install-software.sh** - apt packages, swap (8GB), go2rtc, cloudflared, GStreamer plugins, Python venv
+1. **install-software.sh** - apt packages, swap (8GB), go2rtc, cloudflared, GStreamer plugins
 2. **setup-services.sh** - deploys configs/scripts to system paths, creates `/etc/device/device.env`, enables all services, installs cronjobs
 
 ### setup-services.sh Phases
@@ -543,8 +543,6 @@ Consumer: `ai_core/src/shm_video_source.py` reads frames via matching protocol.
 ├── faces/               # Face crops
 ├── logs/                # App logs
 └── models/              # ML models
-
-/data/venv/mini-pc/      # Shared Python venv
 
 /etc/go2rtc/go2rtc.yaml  # Streaming config
 /etc/nginx/sites-available/go2rtc  # Reverse proxy
