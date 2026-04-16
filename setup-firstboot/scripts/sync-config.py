@@ -557,11 +557,20 @@ if zones:
 db.close()
 
 # ---------------------------------------------------------------------------
-# Sync SQS config → /opt/logic_service/.env
+# Sync SQS config → logic_service/.env (runs in-place inside the repo)
 # ---------------------------------------------------------------------------
-LOGIC_ENV = Path("/opt/logic_service/.env")
-LOGIC_ENV_EXAMPLE = Path("/opt/logic_service/.env.example")
-LOGIC_ENV.parent.mkdir(parents=True, exist_ok=True)
+_repo_path_file = Path("/etc/device/repo-path")
+if _repo_path_file.exists():
+    _repo_root = _repo_path_file.read_text().strip().rstrip("/")
+    # repo-path points to setup-firstboot/, parent is the repo root
+    _logic_dir = Path(_repo_root).parent / "src" / "logic_service"
+else:
+    # Fallback for legacy installs
+    _logic_dir = Path("/opt/logic_service")
+
+LOGIC_ENV = _logic_dir / ".env"
+LOGIC_ENV_EXAMPLE = _logic_dir / ".env.example"
+_logic_dir.mkdir(parents=True, exist_ok=True)
 
 SQS_ENV_KEYS = {
     "AWS_SQS_REGION": data.get("aws_sqs_region") or "",
