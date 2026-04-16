@@ -11,7 +11,7 @@ class FallDetection(BaseModel):
     """A single confirmed fall event for one tracked person."""
 
     track_id: int = Field(..., description="ByteTrack persistent ID")
-    bbox: List[int] = Field(
+    bbox: List[float] = Field(
         ..., description="Bounding box [x1, y1, x2, y2] in full-frame coordinates"
     )
     confidence: Optional[float] = Field(
