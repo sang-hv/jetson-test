@@ -16,6 +16,7 @@ RestartSec=10
 
 Environment=PYTHONUNBUFFERED=1
 Environment=DISPLAY_ENABLED=false
+Environment=QT_QPA_PLATFORM=offscreen
 
 StandardOutput=journal
 StandardError=journal
