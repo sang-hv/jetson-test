@@ -169,7 +169,7 @@ fi
 step "Install Python dependencies (global)"
 REQ_FILE="$SCRIPT_DIR/../src/requirements.lock.txt"
 if [ -f "$REQ_FILE" ]; then
-    run_stream pip install -r "$REQ_FILE"
+    run_stream pip install -r "$REQ_FILE" --no-deps
     log "Python deps installed from $REQ_FILE (global)"
 else
     warn "Missing $REQ_FILE — skipping pip install"
