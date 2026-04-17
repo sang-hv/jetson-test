@@ -10,7 +10,6 @@ python-dotenv==1.2.2
 ultralytics==8.4.21
 insightface==0.7.3
 opencv-python==4.11.0.86
-onnxruntime-gpu @ file:///home/avis/mini-pc/src/ai_core/onnxruntime_gpu-1.18.0-cp310-cp310-linux_aarch64.whl
 numpy==1.26.4
 pillow==12.1.1
 Jetson.GPIO==2.1.7; platform_machine=='aarch64'
