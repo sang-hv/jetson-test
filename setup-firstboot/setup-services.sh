@@ -401,6 +401,7 @@ if [ -d "$LOGIC_SRC" ]; then
     fi
 
     sed -e "s|__LOGIC_DIR__|$LOGIC_SRC|" \
+        -e "s|__USER__|$ACTUAL_USER|" \
         "$SCRIPT_DIR/services/logic-service.service" > /etc/systemd/system/logic-service.service
     systemctl daemon-reload
     systemctl enable logic-service.service
@@ -418,7 +419,9 @@ if [ -d "$AI_SRC" ]; then
         warn "AI Core .env copied from .env.example — sync-config will set PIPELINE_TYPE"
     fi
     # Generate service file with actual source path
-    sed "s|__AI_CORE_DIR__|$AI_SRC|" "$SCRIPT_DIR/services/ai-core.service" \
+    sed -e "s|__AI_CORE_DIR__|$AI_SRC|" \
+        -e "s|__USER__|$ACTUAL_USER|" \
+        "$SCRIPT_DIR/services/ai-core.service" \
         > /etc/systemd/system/ai-core.service
     systemctl daemon-reload
     systemctl enable ai-core.service

@@ -5,8 +5,8 @@ Wants=camera-stream.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=__USER__
+Group=__USER__
 
 WorkingDirectory=__AI_CORE_DIR__
 ExecStart=/usr/bin/python3 main.py --device cuda

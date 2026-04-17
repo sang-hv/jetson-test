@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=__USER__
+Group=__USER__
 
 WorkingDirectory=__LOGIC_DIR__
 ExecStart=/usr/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 8095 --log-level info
