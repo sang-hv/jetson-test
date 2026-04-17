@@ -661,6 +661,7 @@ FACILITY_TO_PIPELINE = {
     "Family": "home",
     "Store": "shop",
     "Enterprise": "enterprise",
+    "Hospital": "hospital",
 }
 
 ai_restart_needed = False
