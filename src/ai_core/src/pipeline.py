@@ -258,7 +258,11 @@ class Config:
 
         # Parse detection image directory from .env
         detection_image_dir = env_vars.get("DETECTION_IMAGE_DIR", "detection")
-        display_enabled = env_vars.get("DISPLAY_ENABLED", "true").lower() == "true"
+
+        # Headless override: systemd can set DISPLAY_ENABLED=false, which should
+        # take precedence over the .env template default (DISPLAY_ENABLED=true).
+        display_enabled_raw = os.environ.get("DISPLAY_ENABLED", env_vars.get("DISPLAY_ENABLED", "true"))
+        display_enabled = str(display_enabled_raw).lower() == "true"
 
         # Parse pipeline type from .env
         pipeline_type = env_vars.get("PIPELINE_TYPE", "home").lower()
