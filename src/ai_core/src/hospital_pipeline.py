@@ -103,6 +103,8 @@ class HospitalPipeline:
 
         # process_frame mutates detect_frame in-place (it's a view of frame
         # when no zone, or a slice of frame when zoned — both update frame).
+        # Snapshot the raw frame first so saved images don't include the HUD.
+        raw_frame = frame.copy()
         _, fall_events = self.fall_detector.process_frame(detect_frame)
 
         for ev in fall_events:
@@ -110,7 +112,7 @@ class HospitalPipeline:
             full_bbox = [x1 + zone_offset_x, y1 + zone_offset_y,
                          x2 + zone_offset_x, y2 + zone_offset_y]
             detection_result = self.detection_saver.save_frame_with_box(
-                frame, full_bbox, "fall_detected", ev["track_id"], "Unknown",
+                raw_frame, full_bbox, "fall_detected", ev["track_id"], "Unknown",
             )
             ev_full = {
                 "track_id": ev["track_id"],
