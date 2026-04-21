@@ -5,6 +5,8 @@ streams:
   camera:
     - exec:ffmpeg -i tcp://localhost:8553 -c copy -f mpegts pipe:1
 
+  camera_mobile:
+    - exec:ffmpeg -i tcp://localhost:8553 -vf scale=640:360 -c:v libx264 -preset ultrafast -tune zerolatency -b:v 400k -maxrate 500k -bufsize 800k -r 15 -g 30 -profile:v baseline -pix_fmt yuv420p -c:a aac -b:a 64k -ac 1 -ar 44100 -f mpegts pipe:1
 api:
   listen: ":1984"
   origin: "*"
