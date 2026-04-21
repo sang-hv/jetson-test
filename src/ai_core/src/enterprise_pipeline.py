@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, List, Set
 
 import numpy as np
 
@@ -37,6 +37,17 @@ class _PendingRestrictedAlert:
 
     track_id: int
     entered_at: float       # time.time() when first detected in zone as unknown
+    last_bbox: np.ndarray   # updated each frame for image saving
+    last_frame: np.ndarray  # updated each frame for image saving
+
+
+@dataclass
+class _PendingPPEViolation:
+    """State for a track with a PPE violation awaiting identity resolution."""
+
+    track_id: int
+    violations: Set[str]    # accumulated violation types: {"mask", "helmet", "glove"}
+    entered_at: float       # time.time() when the first violation was detected
     last_bbox: np.ndarray   # updated each frame for image saving
     last_frame: np.ndarray  # updated each frame for image saving
 
@@ -67,6 +78,8 @@ class EnterprisePipeline(BasePipeline):
 
         # PPE violation alert: maps track_id → set of violation types already alerted (reset when track leaves frame)
         self._ppe_alerted_tracks: Dict[int, set] = {}
+        # Deferred PPE alerts: wait for identity resolution before sending (same pattern as restricted zone)
+        self._pending_ppe_violations: Dict[int, _PendingPPEViolation] = {}
 
         if config.ppe_violation_alert_enabled:
             items = []
@@ -328,25 +341,49 @@ class EnterprisePipeline(BasePipeline):
             if tid in active_ids
         }
 
+    def _build_ppe_detection(
+        self,
+        tid: int,
+        label: str,
+        violations: List[str],
+        bbox: np.ndarray,
+        frame: np.ndarray,
+    ) -> dict:
+        """Build one detection dict for the PPE violation alert payload."""
+        track_info = self.track_manager.get_track_info(tid)
+        confidence = track_info.get("avg_score") if track_info else None
+        detection_result = self.detection_saver.save_frame_with_box(
+            frame, bbox, "ppe_violation", tid, label,
+        )
+        return {
+            "track_id": tid,
+            "person_id": label,
+            "violations": violations,
+            "confidence": confidence,
+            "detection_result": detection_result,
+        }
+
     def _check_ppe_violations(
         self, tracked_persons: List[TrackedPerson], frame: np.ndarray
     ) -> None:
         """Alert when a person is confirmed not wearing required PPE.
 
-        Only fires when status is confirmed False (not None/uncertain).
-        Per-track cooldown prevents repeated alerts while person remains in frame.
+        If the person's identity has not yet been confirmed by face recognition,
+        defer the alert up to ``config.ppe_violation_identity_grace_period``
+        seconds.  The deferred alert fires when the person is identified, when
+        the grace period expires (sent as "Unknown"), or when the track is lost
+        (sent as "Unknown" using the last known frame/bbox).
         """
         cfg = self.config
         now = time.time()
-        detections = []
+        detections: List[dict] = []
 
+        # --- Phase A: collect per-track new violations ---
+        # person_lookup maps tid -> (person, list_of_new_violations_this_frame)
+        person_lookup: Dict[int, tuple] = {}
         for person in tracked_persons:
             tid = person.track_id
 
-            mask_status = self.track_manager.get_mask_status(tid)
-            print(f"[PPE DEBUG] tid={tid} mask_status={mask_status}")
-
-            # Collect confirmed violations (False only — None means uncertain, skip)
             violations: List[str] = []
             if cfg.ppe_violation_alert_mask and self.track_manager.get_mask_status(tid) is False:
                 violations.append("mask")
@@ -355,37 +392,100 @@ class EnterprisePipeline(BasePipeline):
             if cfg.ppe_violation_alert_glove and self.track_manager.get_glove_status(tid) is False:
                 violations.append("glove")
 
-            if not violations:
-                continue
-
-            # Filter out violation types already alerted for this track
             already_alerted = self._ppe_alerted_tracks.get(tid, set())
             new_violations = [v for v in violations if v not in already_alerted]
+            person_lookup[tid] = (person, new_violations)
 
+        active_ids = set(person_lookup.keys())
+
+        # --- Phase B: handle newly detected violations ---
+        for tid, (person, new_violations) in person_lookup.items():
             if not new_violations:
-                print(f"[PPE DEBUG] tid={tid} skip — all violations already alerted: {already_alerted}")
+                # Still keep stored frame/bbox fresh if a pending entry exists
+                if tid in self._pending_ppe_violations:
+                    pending = self._pending_ppe_violations[tid]
+                    pending.last_bbox = person.bbox.copy()
+                    pending.last_frame = frame.copy()
                 continue
 
-            # Record newly alerted violation types
-            self._ppe_alerted_tracks.setdefault(tid, set()).update(new_violations)
-            violations = new_violations
-            print(f"[PPE DEBUG] tid={tid} new_violations={new_violations} — sending ZMQ alert")
+            if tid in self._pending_ppe_violations:
+                # Merge additional violation types into the existing pending entry
+                pending = self._pending_ppe_violations[tid]
+                pending.violations.update(new_violations)
+                pending.last_bbox = person.bbox.copy()
+                pending.last_frame = frame.copy()
+                continue
 
             label = self.track_manager.get_label(tid)
-            track_info = self.track_manager.get_track_info(tid)
-            confidence = track_info.get("avg_score") if track_info else None
-            detection_result = self.detection_saver.save_frame_with_box(
-                frame, person.bbox, "ppe_violation", tid, label
-            )
+            if self._is_identified(label):
+                # Identity is already confirmed — send immediately
+                self._ppe_alerted_tracks.setdefault(tid, set()).update(new_violations)
+                detections.append(
+                    self._build_ppe_detection(tid, label, list(new_violations), person.bbox, frame)
+                )
+                print(
+                    f"[PPE] tid={tid} label={label!r} violations={new_violations} "
+                    f"— sending ZMQ alert (reason=identified)"
+                )
+            else:
+                # Unknown / uncertain — defer until identity is confirmed or grace expires
+                self._pending_ppe_violations[tid] = _PendingPPEViolation(
+                    track_id=tid,
+                    violations=set(new_violations),
+                    entered_at=now,
+                    last_bbox=person.bbox.copy(),
+                    last_frame=frame.copy(),
+                )
+                print(
+                    f"[PPE] tid={tid} label={label!r} violations={new_violations} "
+                    f"— deferred (grace {cfg.ppe_violation_identity_grace_period}s)"
+                )
 
-            detections.append({
-                "track_id": tid,
-                "person_id": label,
-                "violations": violations,
-                "confidence": confidence,
-                "detection_result": detection_result,
-            })
+        # --- Phase C: resolve pending alerts ---
+        resolved_tids: List[int] = []
+        for tid, pending in self._pending_ppe_violations.items():
+            label = self.track_manager.get_label(tid)
+            elapsed = now - pending.entered_at
 
+            send_now = False
+            use_stored = False
+            reason = ""
+
+            if tid not in active_ids:
+                send_now = True
+                use_stored = True
+                label = "Unknown"
+                reason = "track_lost"
+            elif self._is_identified(label):
+                send_now = True
+                reason = "identified"
+            elif elapsed >= cfg.ppe_violation_identity_grace_period:
+                send_now = True
+                label = "Unknown"
+                reason = "grace_expired"
+
+            if send_now:
+                resolved_tids.append(tid)
+                violations_list = sorted(pending.violations)
+                self._ppe_alerted_tracks.setdefault(tid, set()).update(pending.violations)
+                if use_stored:
+                    detections.append(self._build_ppe_detection(
+                        tid, label, violations_list, pending.last_bbox, pending.last_frame,
+                    ))
+                else:
+                    person, _ = person_lookup[tid]
+                    detections.append(self._build_ppe_detection(
+                        tid, label, violations_list, person.bbox, frame,
+                    ))
+                print(
+                    f"[PPE] tid={tid} label={label!r} violations={violations_list} "
+                    f"— sending ZMQ alert (reason={reason})"
+                )
+
+        for tid in resolved_tids:
+            del self._pending_ppe_violations[tid]
+
+        # --- Phase D: send batched detections ---
         if detections:
             self.zmq_publisher.send_ppe_violation_alert({
                 "timestamp": now,

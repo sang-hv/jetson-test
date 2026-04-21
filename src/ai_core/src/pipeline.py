@@ -79,6 +79,10 @@ class Config:
     ppe_violation_alert_mask: bool = True
     ppe_violation_alert_helmet: bool = True
     ppe_violation_alert_glove: bool = True
+    # Defer PPE alert until face recognition confirms identity (seconds).
+    # If identity is not confirmed within this window — or the track leaves
+    # the frame — the alert is sent with person_id="Unknown".
+    ppe_violation_identity_grace_period: float = 5.0
 
     # People counting (line crossing) settings
     # Line + in_direction_point loaded from DB (detection_zones, code='entry_exit')
@@ -159,6 +163,9 @@ class Config:
         ppe_violation_alert_mask = env_vars.get("PPE_VIOLATION_ALERT_MASK", "true").lower() == "true"
         ppe_violation_alert_helmet = env_vars.get("PPE_VIOLATION_ALERT_HELMET", "true").lower() == "true"
         ppe_violation_alert_glove = env_vars.get("PPE_VIOLATION_ALERT_GLOVE", "true").lower() == "true"
+        ppe_violation_identity_grace_period = float(
+            env_vars.get("PPE_VIOLATION_IDENTITY_GRACE_PERIOD", "5")
+        )
 
         # Parse counting settings from .env
         counting_enabled = env_vars.get("COUNTING_ENABLED", "false").lower() == "true"
@@ -297,6 +304,7 @@ class Config:
             ppe_violation_alert_mask=ppe_violation_alert_mask,
             ppe_violation_alert_helmet=ppe_violation_alert_helmet,
             ppe_violation_alert_glove=ppe_violation_alert_glove,
+            ppe_violation_identity_grace_period=ppe_violation_identity_grace_period,
             # Counting from .env
             counting_enabled=counting_enabled,
             counting_line_start=counting_line_start,
