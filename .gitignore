@@ -8,3 +8,5 @@ src/logic_service/.env
 src/ai_core/.env
 .vscode/
 src/app.log
+.claude/
+.cursor/

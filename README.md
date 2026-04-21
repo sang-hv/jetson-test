@@ -1,68 +1,40 @@
 # Mini PC - Jetson Nano AI Edge Computing System
 
-AI-powered edge computing system for security monitoring, access control, and analytics.
+AI-powered edge computing system for security monitoring, access control, and analytics, built on NVIDIA Jetson Orin Nano.
+
+The system processes video streams locally with CUDA-accelerated AI models (YOLO + InsightFace), supports three facility modes (home/shop/enterprise), and communicates with the backend via Cloudflare tunnel for remote management and OTA updates.
 
 ## Hardware Requirements
 
-- **NVIDIA Jetson Nano** (4GB recommended)
-- USB Camera hoặc IP Camera (RTSP support)
-- Microphone & Speaker (optional)
-- WiFi/4G/5G Module
-- Storage: 64GB+ SD Card hoặc NVMe SSD
+- **NVIDIA Jetson Orin Nano** (8GB RAM)
+- CSI Camera IMX219
+- USB Microphone & Speaker (Jabra)
+- SIM7600 LTE Module
+- NVMe SSD 256GB
 
-## Project Structure
+## Documentation
 
-```
-mini-pc/
-├── src/
-│   ├── ai_core/          # AI Models & Inference (TensorRT)
-│   ├── features/         # Feature Modules
-│   ├── camera/           # Camera & Streaming
-│   ├── audio/            # Audio Processing
-│   ├── backend_client/   # Cloud Connectivity
-│   ├── storage/          # Local Storage Management
-│   ├── scheduler/        # Task Scheduling
-│   ├── security/         # Security & Encryption
-│   └── system/           # System Monitoring & Management
-├── config/               # Configuration Files
-├── scripts/              # Utility Scripts
-├── tests/                # Test Suites
-├── docs/                 # Documentation
-└── docker/               # Docker Configuration
-```
+| | English | 日本語 |
+|---|---------|--------|
+| Architecture | [docs/en/architecture.md](docs/en/architecture.md) | [docs/ja/architecture.md](docs/ja/architecture.md) |
+| Setup | [docs/en/setup.md](docs/en/setup.md) | [docs/ja/setup.md](docs/ja/setup.md) |
+
+### Architecture
+
+System architecture, core components (video pipeline, AI detection, logic service, streaming, networking, OTA, BLE OOBE), service reference, data flow diagrams, file system layout, and authentication.
+
+### Setup
+
+Installation guide, device provisioning, service management, network configuration, OTA updates, system cloning, backend sync, diagnostics, and troubleshooting.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-./scripts/setup.sh
-
-# Run development server
-python src/main.py
-
-# Run with Docker
-docker-compose up -d
-```
-
-## 4G LTE Module Setup (SIM7600G-H)
-
-The system is pre-configured to automatically manage the 4G LTE connection and handle network failover (LAN > WiFi > 4G) via `master-setup.sh`.
-
-**Important for New Hardware Installations:**
-If you are deploying a brand new SIM7600 module and it fails to get an IP address via DHCP (e.g. `usb0` or `usb2` timeouts), it is likely operating in the default Serial mode rather than the required Linux RNDIS mode.
-
-Run this one-time command on the Jetson Nano terminal to switch the module to RNDIS mode at the hardware level:
-```bash
-sudo systemctl stop ModemManager
-sudo python3 -c 'import os, time; fd = os.open("/dev/ttyUSB2", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK); os.write(fd, b"AT+CUSBPIDSWITCH=9011,1,1\r\n"); time.sleep(1); os.close(fd)'
+scp -r . user@jetson-ip:/home/user/mini-pc/
+ssh user@jetson-ip
+cd /home/user/mini-pc/setup-firstboot
+sudo ./master-setup.sh
 sudo reboot
 ```
-The auto-healing watchdog service will take care of everything after the reboot.
 
-## Development
-
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for development guidelines.
-
-## License
-
-Proprietary - DEHA Solutions
+See [Setup documentation](docs/en/setup.md) for detailed instructions.
