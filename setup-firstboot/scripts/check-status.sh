@@ -108,13 +108,18 @@ done
 section "Cron Jobs"
 
 CRON_SCRIPTS=("sync-config.py" "device-update.py")
-crontab_content=$(crontab -u "$ACTUAL_USER" -l 2>/dev/null || true)
+crontab_user=$(crontab -u "$ACTUAL_USER" -l 2>/dev/null || true)
+crontab_root=$(crontab -u root -l 2>/dev/null || true)
+crontab_content="${crontab_user}
+${crontab_root}"
 
 for script in "${CRON_SCRIPTS[@]}"; do
     match=$(echo "$crontab_content" | grep "$script" | grep -v '^#' | head -1)
     if [ -n "$match" ]; then
         schedule=$(echo "$match" | awk '{print $1, $2, $3, $4, $5}')
-        printf "  %b  %-25s  %b\n" "$OK" "$script" "${DIM}(${schedule})${NC}"
+        owner="root"
+        echo "$crontab_user" | grep -q "$script" && owner="$ACTUAL_USER"
+        printf "  %b  %-25s  %b\n" "$OK" "$script" "${DIM}(${schedule}, ${owner})${NC}"
     else
         printf "  %b  %-25s  not in crontab\n" "$FAIL" "$script"
     fi
@@ -241,21 +246,6 @@ else
     printf "  %b  USB device              not found in lsusb\n" "$FAIL"
 fi
 
-# Check ModemManager
-if systemctl is-active --quiet ModemManager 2>/dev/null; then
-    modem_idx=$(mmcli -L 2>/dev/null | grep -oP '/org/freedesktop/ModemManager1/Modem/\K[0-9]+' | head -1)
-    if [ -n "$modem_idx" ]; then
-        modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -i "state" | head -1 | sed 's/.*state[^:]*://;s/^[ \t]*//' || echo "unknown")
-        signal=$(mmcli -m "$modem_idx" --signal-get 2>/dev/null | grep -i "rssi\|rsrp" | head -1 | sed 's/.*://;s/^[ \t]*//' || true)
-        printf "  %b  ModemManager           modem %s — %s\n" "$OK" "$modem_idx" "$modem_state"
-        [ -n "$signal" ] && printf "     %b signal: %s%b\n" "$DIM" "$signal" "$NC"
-    else
-        printf "  %b  ModemManager           running but no modem registered\n" "$WARN"
-    fi
-else
-    printf "  %b  ModemManager           not running\n" "$WARN"
-fi
-
 # Check 4G interface
 iface_file="/run/4g-interface"
 if [ -f "$iface_file" ]; then
@@ -306,14 +296,6 @@ if [ -f /etc/device/device.env ]; then
     source /etc/device/device.env 2>/dev/null
     printf "  Device ID:    %s\n" "${DEVICE_ID:-not set}"
     printf "  Backend URL:  %s\n" "${BACKEND_URL:-not set}"
-fi
-
-if [ -f /etc/device/repo-path ]; then
-    repo=$(cat /etc/device/repo-path)
-    if [ -d "$repo" ]; then
-        version=$(cd "$repo" && git describe --tags --always 2>/dev/null || echo "unknown")
-        printf "  Version:      %s\n" "$version"
-    fi
 fi
 
 echo ""

@@ -20,7 +20,27 @@ Tương thích:
 # =============================================================================
 
 # Tên thiết bị BLE - Mobile App sẽ tìm kiếm thiết bị với tên này
-BLE_DEVICE_NAME = "Jetson_AI_Kit"
+# Format: "Avis {camera_name}" from SQLite, fallback to "Avis Cam"
+def _load_ble_device_name() -> str:
+    """Build BLE device name from camera_name in logic_service.db."""
+    import sqlite3
+    from pathlib import Path
+
+    for db_path in ("/data/mini-pc/db/logic_service.db", str(Path.home() / "data/db/logic_service.db")):
+        try:
+            db = sqlite3.connect(db_path, timeout=3)
+            row = db.execute(
+                "SELECT value FROM camera_settings WHERE key = 'camera_name' LIMIT 1"
+            ).fetchone()
+            db.close()
+            if row and row[0]:
+                return f"AIVIS {row[0].strip()}"
+        except Exception:
+            continue
+    return "AIVIS Camera"
+
+
+BLE_DEVICE_NAME = _load_ble_device_name()
 
 # UUID cho BLE Service chính
 # Format: 12345678-1234-5678-1234-56789abcdef0

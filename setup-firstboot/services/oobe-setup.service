@@ -8,6 +8,8 @@ Type=simple
 User=root
 Group=root
 
+ExecStartPre=+/bin/systemctl restart bluetooth
+ExecStartPre=/bin/sleep 2
 ExecStart=/usr/bin/python3 /opt/oobe-setup/ble_wifi_setup.py
 
 Restart=on-failure
