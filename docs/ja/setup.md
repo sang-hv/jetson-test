@@ -1,83 +1,317 @@
-# セットアップ
+# セットアップガイド
 
-## 前提条件
+AIVISカメラデバイスのセットアップは3つのフェーズで構成されます：
 
-- JetPack OSがフラッシュ済みのNVIDIA Jetson Orin Nano
-- リボンケーブルで接続されたCSIカメラ（IMX219）
-- ネットワークアクセス（LAN、WiFi、または4G用SIMカード）
-- NVMe SSD（推奨）またはSDカード（`/data`ストレージ用）
+| フェーズ | 内容 | 実施場所 |
+|---------|------|---------|
+| [Phase 1](#phase-1-aivis-adminでカメラを作成) | AIVIS Adminでカメラレコードを作成 | AIVIS Admin Web |
+| [Phase 2](#phase-2-cloudflareトンネルを作成) | Cloudflare Tunnelを作成し、ドメイン/トークンを更新 | Cloudflare Dashboard + AIVIS Admin |
+| [Phase 3](#phase-3-jetsonデバイスのインストールと設定) | Jetsonにソフトウェアをインストール | Jetson Orin Nano（直接操作） |
 
-## クイックスタート
+---
+
+## Phase 1: AIVIS Adminでカメラを作成
+
+### 事前準備
+
+- イメージのダウンロードリンク、バックエンドドメイン、デフォルトアカウント情報などはプロジェクトシートに記載されています。アクセス権がない場合はプロジェクトマネージャーに連絡してください。
+- Jetson Orin NanoのSerial Number（デバイス底面のラベルに記載）
+
+![Jetson Serial Number](../images/phase1/jetson_nano_serial_number.webp)
+
+### 手順
+
+**ステップ1.** AIVIS Adminにログイン
+
+![Login AIVIS Admin](../images/phase1/step1_admin_login_page.png)
+
+**ステップ2.** **Cameras**メニュー > **+ Add New Camera**をクリック
+
+![新規カメラ作成をクリック](../images/phase1/step2_admin_click_create_new_camera.png)
+
+**ステップ3.** カメラ情報を入力
+
+1. **Camera Name**と**Serial Number**（Jetsonのラベルから取得）を入力
+2. **Create**をクリック
+
+> その他のフィールド（Installation Location、Domain Name、Cloudflare Tunnel Token、Facility Type、...）は後で入力可能です。
+
+![新規カメラ作成](../images/phase1/step3_admin_create_camera.png)
+
+**ステップ4.** Device Infoを取得
+
+作成後、カメラ詳細ページ > **Device Info**をクリック。ポップアップに[Phase 3](#phase-3-jetsonデバイスのインストールと設定)で必要な3つの情報が表示されます：
+
+- **Device ID** — カメラのUUID
+- **Backend URL** — APIバックエンドURL
+- **Secret Key** — 認証用HMAC署名キー
+
+![Device IDをコピー](../images/phase1/step4_admin_copy_device_id_to_clipboard.png)
+
+> 各フィールド横のコピーアイコンをクリックして値をコピーします。
+
+---
+
+## Phase 2: Cloudflareトンネルを作成
+
+Cloudflare Tunnelにより、バックエンドがパブリックIPやポートフォワーディングなしでJetsonデバイスにリモートアクセス（OTAアップデート、ライブストリーム、SSH）できます。
+
+> イメージのダウンロードリンク、バックエンドドメイン、デフォルトアカウント情報などはプロジェクトシートに記載されています。アクセス権がない場合はプロジェクトマネージャーに連絡してください。
+
+各カメラには**1つのトンネル**と**2つのPublic Hostname**が必要です：
+- `{device-id}.aivis-camera.ai` — HTTPアクセス（ストリーム、API、OTA）
+- `{device-id}-ssh.aivis-camera.ai` — SSHアクセス
+
+### 手順
+
+**ステップ1.** [Cloudflare Dashboard](https://dash.cloudflare.com)にログイン
+
+![Cloudflare Login](../images/phase2/step1_cloudflare_login_page.png)
+
+**ステップ2.** 左サイドバーで**Zero Trust**を選択
+
+![Zero Trustをクリック](../images/phase2/step2_cloudflare_click_zero_trust.png)
+
+**ステップ3.** **Connectors** > **Cloudflare Tunnels** > **Create a tunnel**をクリック
+
+![トンネル作成](../images/phase2/step3_cloudflare_create_a_tunnel.png)
+
+**ステップ4.** **Cloudflared**を選択 > **Select Cloudflared**をクリック
+
+![Cloudflaredを選択](../images/phase2/step4_cloudflare_select_cloudflared.png)
+
+**ステップ5.** トンネル名を設定
+
+1. トンネル名を`Camera {device-id}`の形式で入力（例：`Camera 671fb184-bcbf-4fe9-8459-a7a85b64f994`）
+2. **Save tunnel**をクリック
+
+![トンネル名を設定](../images/phase2/step5_cloudflare_enter_tunnel_name.png)
+
+**ステップ6.** "Install and run a connector"ページをスキップ > **Next**をクリック
+
+> このステップではインストールコマンドを実行する必要はありません。CloudflaredはJetson上で`install-software.sh`により自動インストールされます。
+
+![Nextをクリック](../images/phase2/step6_cloudflare_click_next.png)
+
+**ステップ7.** **HTTP**（ストリーム/API）用のPublic Hostnameを追加
+
+1. **Subdomain**: `{device-id}`（例：`671fb184-bcbf-4fe9-8459-a7a85b64f994`）
+2. **Domain**: `aivis-camera.ai`
+3. **Type**: `HTTP`
+4. **URL**: `localhost`
+5. **Complete setup**をクリック
+
+![ストリームドメインを追加](../images/phase2/step7_cloudflare_enter_domain_stream_for_camera.png)
+
+**ステップ8.** トンネル一覧に戻る > 作成したトンネルの**Configure**をクリック
+
+![Configureをクリック](../images/phase2/step8_cloudflare_click_config_camera_after_created.png)
+
+**ステップ9.** **Published application routes**タブを選択 > **+ Add a published application route**をクリック
+
+![新しいルートを追加](../images/phase2/step9_cloudflare_click_add_a_published_application_route_button.png)
+
+**ステップ10.** **SSH**用のPublic Hostnameを追加
+
+1. **Subdomain**: `{device-id}-ssh`（例：`671fb184-bcbf-4fe9-8459-a7a85b64f994-ssh`）
+2. **Domain**: `aivis-camera.ai`
+3. **Type**: `SSH`
+4. **URL**: `localhost:22`
+5. **Save**をクリック
+
+![SSHドメインを追加](../images/phase2/step10_cloudflare_enter_domain_ssh_for_camera.png)
+
+**ステップ11.** **Overview**タブを選択 > **Connectors**セクションで**Add a connector**をクリック
+
+![コネクタを追加](../images/phase2/step11_cloudflare_click_add_a_connector_button.png)
+
+**ステップ12.** **Tunnel Token**をコピー
+
+"Install and run a connector"ポップアップで、コマンド`cloudflared tunnel run --token eyJhI...`からトークンをコピー
+
+> トークン部分（`eyJ...`で始まる）のみをコピーしてください。コマンド全体ではありません。
+
+![トンネルトークンをコピー](../images/phase2/step12_cloudflare_copy_tunnel_token.png)
+
+**ステップ13.** AIVIS Adminに戻る > カメラ詳細ページ > **Edit**をクリック
+
+![カメラを編集](../images/phase2/step13_admin_edit_current_camera.png)
+
+**ステップ14.** **Domain Name**と**Cloudflare Tunnel Token**フィールド横のロックアイコンをクリックして編集を有効化
+
+![入力ロック解除](../images/phase2/step14_admin_click_icon_for_enable_domain_and_token_input.png)
+
+**ステップ15.** Domain NameとTunnel Tokenを入力
+
+1. **Domain Name**: CloudflareのPublished application routesタブからコピー（HTTPホスト名、例：`671fb184-bcbf-4fe9-8459-a7a85b64f994.aivis-camera.ai`）
+
+   ![Cloudflareからドメインを取得](../images/phase2/step15_get_domain_from_cloudflare_tab.png)
+
+2. **Cloudflare Tunnel Token**: ステップ12でコピーしたトークンを貼り付け
+3. **Save**をクリック
+
+![ドメインとトークンを入力](../images/phase2/step15_admin_enter_domain_and_token.png)
+
+---
+
+## Phase 3: Jetsonデバイスのインストールと設定
+
+### 必要なもの
+
+- NVMe SSD 256GB（新品またはフォーマット済み）
+- システムイメージファイル（ダウンロードリンクはプロジェクトシートを参照）
+- SSD書き込みアダプタ（USB-to-NVMeまたはM.2スロット搭載PC）
+- [Phase 1 - ステップ4](#手順)のDevice Info：Device ID、Backend URL、Secret Key
+
+### 手順
+
+**ステップ1.** システムイメージをダウンロード
+
+プロジェクトシートのリンクからシステムイメージをダウンロードします。
+
+> イメージのダウンロードリンク、バックエンドドメイン、デフォルトアカウント情報などはプロジェクトシートに記載されています。アクセス権がない場合はプロジェクトマネージャーに連絡してください。
+
+**ステップ2.** イメージをSSDに書き込み
+
+アダプタ経由でSSDをPCに接続し、イメージを書き込みます：
 
 ```bash
-# 1. リポジトリをJetsonにコピー
-scp -r . user@jetson-ip:/home/user/mini-pc/
-
-# 2. デバイスにSSH接続
-ssh user@jetson-ip
-
-# 3. マスターセットアップを実行
-cd /home/user/mini-pc/setup-firstboot
-sudo ./master-setup.sh
-
-# 4. 再起動
-sudo reboot
+# 圧縮ファイル（.img.gz）から
+pigz -dc jetson-base.img.gz | sudo dd of=/dev/<ssd-device> bs=4M status=progress
 ```
 
-新規またはクローンデバイスの場合、`--prompt-device-env`でデバイスIDを設定します：
+> `<ssd-device>`は実際のSSDデバイス名に置き換えてください（例：`sda`、`nvme0n1`）。書き込み前に`lsblk`で確認してください。
+
+**ステップ3.** ハードウェアの組み立て
+
+SSDをJetson Orin Nanoに挿入し、すべての周辺機器を接続します：
+
+| デバイス | 接続先 |
+|---------|--------|
+| NVMe SSD 256GB | ボード上のM.2スロット |
+| CSIカメラ（IMX219） | リボンケーブルでCSIポート |
+| USBマイク/スピーカー | USBポート |
+| SIM7600 LTEモジュール | USBポート（4G必要時） |
+| 電源（9-19V 5A） | DCバレルジャック |
+| LANケーブル（初期セットアップ推奨） | Ethernetポート |
+| モニター（HDMI） | HDMIポート（初期セットアップに必要） |
+| USBキーボード | USBポート（初期セットアップに必要） |
+
+![ハードウェア組み立て - 上面](../images/phase3_physical_settings/illustrative01.webp)
+
+![ハードウェア組み立て - 前面](../images/phase3_physical_settings/illustrative02.webp)
+
+> モニターとキーボードは初期セットアップ時のみ必要です。セットアップ完了後は取り外し、SSH経由でリモート管理できます。
+
+**ステップ4.** 電源投入と直接ログイン
+
+Jetsonに電源を入れ、起動完了まで約1〜2分待ちます。接続したモニターで直接ログインします：
+
+```
+avis-cam login: avis
+Password: 1
+```
+
+> 新しいデバイスはネットワーク接続がないため、SSHは使用できません。モニター + キーボードで直接操作する必要があります。
+
+**ステップ5.** マスターセットアップを実行
 
 ```bash
-sudo ./master-setup.sh --prompt-device-env
+sudo bash mini-pc/setup-firstboot/master-setup.sh --prompt-device-env --restart-all
 ```
 
-## インストールフェーズ
+rootパスワード（`1`）を入力後、スクリプトが3つの情報を要求します（[Phase 1 - ステップ4](#手順)から取得）：
 
-`master-setup.sh`は2つのフェーズを順番に実行します：
+```
+DEVICE_ID: 671fb184-bcbf-4fe9-8459-a7a85b64f994
+BACKEND_URL: https://avis-api-dev.aivis-camera.ai
+SECRET_KEY (hidden): ••••••••••
+```
 
-### フェーズ1: install-software.sh
+スクリプトが自動的に実行：
+1. **install-software.sh** — パッケージ、スワップ、go2rtc、cloudflaredをインストール
+2. **setup-services.sh --restart-all** — ファイルをデプロイし、すべてのサービスを有効化・再起動
 
-システムレベルの依存関係をインストール：
+**ステップ6.** ステータス確認
 
-- APTパッケージ（GStreamerプラグイン、Nginx、Pythonなど）
-- スワップ設定（8GB）
-- go2rtcストリーミングサーバー
-- Cloudflaredトンネルクライアント
+```bash
+sudo bash mini-pc/setup-firstboot/scripts/check-status.sh
+```
 
-### フェーズ2: setup-services.sh
+期待される結果 — すべてのサービスが**active**で、ハードウェアが検出されていること：
 
-アプリケーションファイルのデプロイとすべてのサービスの有効化：
+```
+━━━ Services ━━━
+  ✓  camera-stream         active      (enabled)
+  ✓  go2rtc                active      (enabled)
+  ✓  ai-core               active      (enabled)
+  ✓  logic-service         active      (enabled)
+  ✓  oobe-setup            active      (enabled)
+  ✓  backchannel           active      (enabled)
+  ✓  person-count-ws       active      (enabled)
+  ✓  stream-auth           active      (enabled)
+  ✓  device-update-server  active      (enabled)
+  ✓  nginx                 active      (enabled)
+  ✓  sim7600-4g            active      (enabled)
+  ✓  network-watchdog      active      (enabled)
+  ✓  cloudflared           active      (enabled)
+  ✓  audio-autostart [user]  active      (enabled)
 
-| ステップ | 説明 |
-|---------|-------------|
-| 1/11 | go2rtcストリームサービス |
-| 2/11 | デバイスIDと同期スクリプト |
-| 3/11 | Cloudflaredサービスチェック |
-| 4/11 | バックチャネル、人数カウントWebSocket、ストリーム認証 |
-| 5/11 | デバイスOTAアップデートサーバー |
-| 6/11 | Nginxリバースプロキシ |
-| 7/11 | 音声自動起動 |
-| 8/11 | SIM7600 4Gスクリプト/サービス |
-| 9/11 | OOBE BLEセットアップ |
-| 10/11 | ロジックサービス（ZMQ + FastAPI） |
-| 11/11 | AI Core検出パイプライン |
+━━━ Cron Jobs ━━━
+  ✓  sync-config.py             (*/5 * * * *, root)
+  ✓  device-update.py           (*/5 * * * *, root)
 
-## デバイスID
+━━━ CSI Camera ━━━
+  ✓  nvargus-daemon          active
+  ✓  video devices           /dev/video0
+  ✓  AI shared memory        12441664 bytes
 
-デバイスIDは`/etc/device/device.env`に保存され、`sync-config.py`と`device-update.py`がバックエンドとの通信に使用します。
+━━━ USB Audio ━━━
+  ✓  PulseAudio              running
+  ✓  Speaker                 alsa_output.usb-...-00.iec958-stereo (SUSPENDED)
+  ✓  Microphone              alsa_input.usb-...-00.analog-stereo (RUNNING)
+  ✓  Echo Cancel             loaded (module ...)
+      echocancel_sink: SUSPENDED, echocancel_source: RUNNING
 
-| 変数 | 説明 |
-|----------|-------------|
-| `DEVICE_ID` | バックエンドから取得した一意のカメラUUID |
-| `BACKEND_URL` | APIベースURL |
-| `SECRET_KEY` | API認証用のHMAC署名キー |
+━━━ LTE Module (SIM7600) ━━━
+  ✓  USB serial              /dev/ttyUSB0,...
+  ✓  USB device              Bus 001 Device 006: ID 1e0e:9011 ...
+  ✓  4G interface            usb2 — 169.254.x.x/16
 
-`--prompt-device-env`で対話的に設定するか、`/etc/device/device.env`を直接編集します。
+━━━ Network ━━━
+  Mode: auto
+  ✓  wlP1p1s0               192.168.x.x/24
+  Default route: default via 192.168.x.1 dev wlP1p1s0
+
+━━━ Device Info ━━━
+  Device ID:    671fb184-bcbf-4fe9-8459-a7a85b64f994
+  Backend URL:  https://avis-api-dev.aivis-camera.ai
+```
+
+**ステップ7.** パスワードを変更
+
+すべてが正常に動作していることを確認後、デフォルトパスワードを**必ず**変更してください：
+
+```bash
+passwd
+```
+
+> 新しいパスワードをDevice IDとともにデバイス管理ファイル（プロジェクトシートまたはパスワードマネージャー）に保存し、必要時にSSHでリモートアクセスできるようにしてください。
+
+### 完了確認
+
+セットアップが正常に完了した場合：
+
+- `sync-config.py`が5分ごとにバックエンドから設定を自動同期
+- `device-update.py`が5分ごとにハートビート（ソフトウェアバージョン）を送信
+- AIVIS Admin上のカメラステータスが**Online**に変更
+- ライブストリームにアクセス可能：`https://{device-id}.aivis-camera.ai`
+
+---
 
 ## サービス管理
 
-`master-setup.sh`と`setup-services.sh`の両方がリスタートフラグをサポートしています。すべてのコマンドは最初にデプロイと有効化を行い、引数に基づいてリスタートを実行します。
-
-### デプロイのみ（リスタートなし）
+### リスタートなしでデプロイ
 
 ```bash
 sudo ./setup-services.sh
@@ -99,218 +333,18 @@ sudo ./setup-services.sh network-watchdog go2rtc nginx
 
 ```bash
 sudo ./master-setup.sh --restart-all
-sudo ./master-setup.sh network-watchdog go2rtc
 ```
 
-無効なサービス名を指定すると、エラーメッセージと有効なサービスの一覧が表示されます。
+### AI Detection表示（GUI）
 
-## ネットワーク設定
-
-### ネットワークモード
-
-設定ファイル: `/etc/device/network.conf`
-
-| モード | 優先順位 | 説明 |
-|------|----------|-------------|
-| `auto` | LAN > WiFi > 4G | デフォルト、利用可能な最良の接続を使用 |
-| `lan` | LAN > 4G > WiFi | 有線接続を優先 |
-| `wifi` | WiFi > 4G > LAN | 無線接続を優先 |
-| `4g` | 4G > LAN > WiFi | セルラー接続を強制 |
-
-### ネットワークモードの切り替え
+モニターで検出結果を直接確認する場合（HDMI接続が必要）：
 
 ```bash
-sudo /opt/4g/switch-network.sh auto   # または: 4g, lan, wifi
+# まずサービスを停止
+sudo systemctl stop ai-core
+
+# GUIでAI検出を実行
+python3 mini-pc/src/ai_core/main.py --device cuda
 ```
 
-### ウォッチドッグ設定
-
-`/etc/device/network.conf`で設定：
-
-| 設定 | デフォルト | 説明 |
-|---------|---------|-------------|
-| `PING_HOST` | 8.8.8.8 | 接続チェック用のpingホスト |
-| `CHECK_INTERVAL` | 30 | チェック間隔（秒） |
-| `MAX_RETRIES` | 3 | フェイルオーバーまでの失敗回数 |
-| `APN` | （キャリア） | SIM7600 LTEモジュールのAPN |
-
-## OTAソフトウェアアップデート
-
-バックエンドAPI経由でリモートソフトウェアアップデートが可能です。
-
-### アップデートフロー
-
-```
-モバイルアプリ                 バックエンドAPI                    Jetson
-    │                              │                              │
-    ├─ POST /cameras/{id}/update ─►│                              │
-    │   { version, run_install }   │                              │
-    │                              ├─ POST /update (トンネル) ───►│
-    │                              │   (HMAC認証)                 ├─ 200 accepted
-    │                              │                              ├─ git fetch + checkout
-    │                              │                              ├─ サービス再デプロイ
-    │                              │◄─ PATCH /update-logs/ack ───┤
-    │◄── update_logsクエリ ────────┤                              │
-```
-
-### アップデートパラメータ
-
-| パラメータ | 説明 |
-|-----------|-------------|
-| `version` | チェックアウトするgitタグまたはブランチ |
-| `run_install` | `true` = フルインストール（`master-setup.sh`）、`false` = デプロイのみ（`setup-services.sh`） |
-| `update_log_id` | ACK追跡用のバックエンドUUID |
-
-### アップデートプロセス（デバイス上）
-
-1. ロック取得（`/tmp/device-update.lock`）
-2. `git fetch origin`
-3. `git checkout <version>`
-4. `setup-services.sh --restart-all`を実行（`run_install=true`の場合は`master-setup.sh --restart-all`）
-5. ヘルスチェック：コアサービスの動作確認
-6. バックエンドに結果をACK（成功/失敗）
-7. ロック解放
-
-### バージョン追跡
-
-デバイスは`software_version`（`git describe --tags`から取得）を5分ごとのハートビート（`device-update.py`）で報告します。バックエンドは`cameras.software_version`に保存します。
-
-## システムクローニング
-
-### 1. ディスクイメージの作成（稼働中のデバイス上）
-
-```bash
-# NVMe全体をUSBドライブにクローン
-sudo dd if=/dev/nvme0n1 of=/media/usb/jetson-image.img bs=4M status=progress
-
-# 圧縮版（容量60-70%削減）
-sudo dd if=/dev/nvme0n1 bs=4M status=progress | gzip > /media/usb/jetson-image.img.gz
-```
-
-### 2. 新しいデバイスへの復元
-
-```bash
-# 生イメージから
-sudo dd if=jetson-image.img of=/dev/nvme0n1 bs=4M status=progress
-
-# 圧縮イメージから
-gunzip -c jetson-image.img.gz | sudo dd of=/dev/nvme0n1 bs=4M status=progress
-```
-
-### 3. デバイスIDの再プロビジョニング
-
-```bash
-cd /home/user/mini-pc/setup-firstboot
-sudo ./master-setup.sh --prompt-device-env
-# 新しいDEVICE_ID、BACKEND_URL、SECRET_KEYを入力
-sudo reboot
-```
-
-再起動後、`sync-config.py`が自動的に新しいデバイスの設定をバックエンドから取得します。
-
-## バックエンド同期
-
-`sync-config.py`は5分間隔のcrontabで実行されます。
-
-### APIコール
-
-| API | 目的 |
-|-----|---------|
-| `GET /api/v1/cameras/{id}/config` | 設定、ルール、ゾーン、Cloudflareトークン、SQS設定の同期 |
-| `GET /api/v1/cameras/{id}/face-embeddings` | ページネーション対応の顔埋め込みベクトル同期 |
-
-認証ヘッダー: `X-Device-ID`、`X-Timestamp`、`X-Signature`（HMAC-SHA256）。
-
-### 同期データ（SQLite）
-
-データベース: `/data/mini-pc/db/logic_service.db`
-
-| テーブル | 内容 |
-|-------|---------|
-| `camera_settings` | stream_secret_key, stream_view_duration, bluetooth_password, facility, ai_threshold, image_retention_days |
-| `ai_rules` | 検出ルール：名前、コード、メンバーID、時間/曜日制約 |
-| `detection_zones` | 座標（JSON）付きポリゴン、方向ポイント |
-| `face_embeddings` | ユーザーの顔ベクトル（`updated_at`追跡によるページネーション同期） |
-
-### 環境ファイルの同期
-
-| 対象 | キー | ソース |
-|--------|------|--------|
-| `/opt/logic_service/.env` | AWS_SQS_REGION, AWS_SQS_QUEUE_URL, AWS_SQS_ACCESS_KEY_ID, AWS_SQS_SECRET_ACCESS_KEY | APIレスポンス |
-| `/opt/ai_core/.env` | PIPELINE_TYPE | facilityからマッピング：Family→home, Store→shop, Enterprise→enterprise |
-
-### 自動リスタートトリガー
-
-| サービス | リスタート条件 |
-|---------|-------------|
-| `logic-service` | `.env`のSQS認証情報が変更された場合 |
-| `ai-core` | `PIPELINE_TYPE`が変更された場合、または`face_embeddings.updated_at`が変更された場合 |
-| `cloudflared` | トンネルトークンが変更された場合 |
-
-## 診断
-
-### 全サービスのステータス確認
-
-```bash
-sudo systemctl status camera-stream go2rtc ai-core logic-service oobe-setup \
-  backchannel person-count-ws stream-auth device-update-server nginx \
-  sim7600-4g network-watchdog cloudflared
-systemctl --user status audio-autostart
-```
-
-### ログの確認
-
-```bash
-sudo journalctl -u camera-stream -f
-sudo journalctl -u ai-core -f
-sudo journalctl -u logic-service -f
-sudo journalctl -u network-watchdog -f
-sudo journalctl -u device-update-server -f
-```
-
-### 音声チェック
-
-```bash
-pactl list short sinks | grep -i "jabra\|echocancel"
-pactl list short sources | grep -i "jabra\|echocancel"
-# USBオーディオを再接続した場合：
-systemctl --user restart audio-autostart
-```
-
-### ネットワークチェック
-
-```bash
-ip route show
-cat /etc/device/network.conf
-cat /run/4g-interface
-mmcli -L
-```
-
-### OTAチェック
-
-```bash
-curl http://127.0.0.1:8092/health
-cd $(cat /etc/device/repo-path) && git describe --tags --always
-```
-
-### トークン検証
-
-```bash
-python3 /opt/stream_auth/check_token.py <token>
-```
-
-## トラブルシューティング
-
-| 症状 | 確認方法 | 対処法 |
-|---------|-------|-----|
-| 映像ストリームなし | `journalctl -u camera-stream` | CSIリボンケーブルを確認、`nvargus-daemon`を再起動 |
-| 音声なし | `pactl list short sinks` | USBオーディオを再接続、`audio-autostart`を再起動 |
-| AIが検出しない | `journalctl -u ai-core` | `.env`のPIPELINE_TYPEを確認、TensorRTエンジンの存在を確認 |
-| ロジックサービスエラー | `journalctl -u logic-service` | `.env`のSQS認証情報を確認、ZMQポート5555を確認 |
-| BLE OOBEが動作しない | `journalctl -u oobe-setup` | `bluetoothctl show`を確認、oobe-setupを再起動 |
-| 4G接続不可 | `mmcli -L`、`journalctl -u sim7600-4g` | SIMを確認、`network.conf`のAPNを確認 |
-| ストリーム認証401 | `check_token.py <token>` | トークン有効期限を確認、DBの`stream_secret_key`を確認 |
-| iOSストリーム失敗 | `stream_token` Cookieを確認 | nginxがCookieを設定し、stream-authが読み取ることを確認 |
-| 設定が同期されない | `cat /etc/device/device.env` | BACKEND_URLの到達性を確認、SECRET_KEYを確認 |
-| OTAアップデート失敗 | `journalctl -u device-update-server` | gitアクセス、ディスク容量、サービスヘルスを確認 |
-| ネットワークが頻繁に切り替わる | `journalctl -u network-watchdog` | `network.conf`の`CHECK_INTERVAL`/`MAX_RETRIES`を調整 |
+> `Ctrl+C`で停止。その後サービスを再起動：`sudo systemctl start ai-core`

@@ -106,10 +106,10 @@ else
 fi
 echo ""
 
-if [ ! -f "$SCRIPT_DIR/install-software.sh" ]; then
-    err "Missing file: $SCRIPT_DIR/install-software.sh"
-    exit 1
-fi
+# if [ ! -f "$SCRIPT_DIR/install-software.sh" ]; then
+#     err "Missing file: $SCRIPT_DIR/install-software.sh"
+#     exit 1
+# fi
 if [ ! -f "$SCRIPT_DIR/setup-services.sh" ]; then
     err "Missing file: $SCRIPT_DIR/setup-services.sh"
     exit 1
@@ -117,7 +117,7 @@ fi
 chmod +x "$SCRIPT_DIR/install-software.sh" "$SCRIPT_DIR/setup-services.sh"
 
 step "Phase 1/2: Install software"
-bash "$SCRIPT_DIR/install-software.sh"
+# bash "$SCRIPT_DIR/install-software.sh"
 
 step "Phase 2/2: Setup files and services"
 bash "$SCRIPT_DIR/setup-services.sh" "${SETUP_SERVICES_ARGS[@]}"
