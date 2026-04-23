@@ -884,21 +884,48 @@ class WiFiSetupHandler:
         self.status_chrc = None  # Sẽ được set bởi WiFiSetupService
         self.mainloop = mainloop
         self._connect_thread: Optional[threading.Thread] = None
-        
+        self._open_wifi_timer: Optional[threading.Timer] = None
+
     def set_ssid(self, ssid: str):
         """Nhận SSID từ BLE."""
         self.ssid = ssid
         self._try_connect()
-        
+        # Nếu password chưa được gửi (WiFi không có mật khẩu),
+        # chờ 2 giây rồi kết nối không mật khẩu
+        if self.password is None:
+            self._schedule_open_wifi_connect()
+
     def set_password(self, password: str):
         """Nhận Password từ BLE."""
+        self._cancel_open_wifi_timer()
         self.password = password
         self._try_connect()
-        
+
+    def _schedule_open_wifi_connect(self):
+        """Lên lịch kết nối không mật khẩu sau 2 giây (cho WiFi mở)."""
+        self._cancel_open_wifi_timer()
+        self._open_wifi_timer = threading.Timer(2.0, self._connect_open_wifi)
+        self._open_wifi_timer.daemon = True
+        self._open_wifi_timer.start()
+
+    def _cancel_open_wifi_timer(self):
+        """Hủy timer open WiFi nếu password đã được gửi."""
+        if self._open_wifi_timer is not None:
+            self._open_wifi_timer.cancel()
+            self._open_wifi_timer = None
+
+    def _connect_open_wifi(self):
+        """Kết nối WiFi không mật khẩu (open network)."""
+        self._open_wifi_timer = None
+        if self.ssid and self.password is None:
+            logger.info(f"Không nhận được password sau 2s, kết nối WiFi mở: {self.ssid}")
+            self.password = ""
+            self._try_connect()
+
     def _try_connect(self):
         """
         Thử kết nối nếu đã có đủ SSID và Password.
-        
+
         Chạy trong thread riêng để không block BLE.
         """
         if self.ssid and self.password is not None:
