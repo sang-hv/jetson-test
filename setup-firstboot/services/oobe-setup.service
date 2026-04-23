@@ -16,8 +16,10 @@ Restart=on-failure
 RestartSec=10
 
 TimeoutStartSec=30
-TimeoutStopSec=15
-WatchdogSec=120
+TimeoutStopSec=10
+WatchdogSec=0
+
+ExecStopPost=/bin/bash -c 'hciconfig hci0 reset 2>/dev/null; sleep 1; bluetoothctl power on 2>/dev/null'
 
 Environment=PYTHONUNBUFFERED=1
 
