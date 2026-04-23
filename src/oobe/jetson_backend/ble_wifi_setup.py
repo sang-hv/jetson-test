@@ -974,9 +974,16 @@ class WiFiSetupHandler:
 
                 # Chờ thêm để BlueZ truyền BLE packet và app nhận được
                 time.sleep(5)
-                logger.info("Kết nối WiFi thành công, đang thoát BLE setup...")
-                if self.mainloop:
-                    GLib.idle_add(self.mainloop.quit)
+                logger.info("Kết nối WiFi thành công, BLE server tiếp tục chạy")
+
+                # Reset state để sẵn sàng cho lần cấu hình tiếp theo
+                self.ssid = None
+                self.password = None
+                time.sleep(5)
+                if self.status_chrc:
+                    GLib.idle_add(
+                        lambda: self.status_chrc.set_status(WiFiStatus.WAITING)
+                    )
             else:
                 logger.error(f"Kết nối thất bại: {message}")
                 if self.status_chrc:
@@ -1223,9 +1230,14 @@ class NetSetupHandler:
 
             # Chờ thêm để BlueZ truyền BLE packet và app nhận được
             time.sleep(5)
-            logger.info("Đã chờ đủ, thoát BLE server...")
-            if self.mainloop:
-                GLib.idle_add(self.mainloop.quit)
+            logger.info("Setup mạng thành công, BLE server tiếp tục chạy")
+
+            # Reset state để sẵn sàng cho lần cấu hình tiếp theo
+            time.sleep(5)
+            if self.net_setup_status_chrc:
+                GLib.idle_add(
+                    lambda: self.net_setup_status_chrc.set_status(NetSetupStatus.WAITING)
+                )
         else:
             logger.error(f"Setup mạng thất bại: {message}")
             if self.net_setup_status_chrc:
@@ -1579,16 +1591,10 @@ def main():
     logger.info("OOBE WiFi Setup - Jetson AI Kit")
     logger.info("=" * 60)
 
-    # Kiểm tra xem có cần khởi động BLE Setup không
-    if not should_start_ble_setup():
-        logger.info("Đã có internet và không có yêu cầu Reset - Thoát")
-        logger.info("Để force khởi động BLE Setup, chạy với tham số --force")
-
-        # Cho phép force start với tham số --force
-        if len(sys.argv) > 1 and sys.argv[1] == "--force":
-            logger.info("Force start được kích hoạt")
-        else:
-            return
+    # BLE server luôn khởi động để cho phép cấu hình lại mạng bất cứ lúc nào
+    has_internet = check_internet_connection()
+    logger.info(f"Trạng thái internet: {'có' if has_internet else 'không có'}")
+    logger.info("Khởi động BLE server (luôn bật để hỗ trợ cấu hình mạng)")
 
     # Kiểm tra D-Bus
     if not DBUS_AVAILABLE:
