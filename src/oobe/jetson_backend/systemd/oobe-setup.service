@@ -37,10 +37,9 @@ ExecStart=/usr/bin/python3 /opt/oobe-setup/ble_wifi_setup.py
 Restart=on-failure
 RestartSec=5
 
-# Timeout khởi động (30 giây)
+# Service chạy liên tục (BLE luôn bật), không giới hạn timeout
 TimeoutStartSec=30
-
-# Tắt systemd watchdog — service dùng idle watchdog nội bộ (10 phút)
+TimeoutStopSec=10
 WatchdogSec=0
 
 # Hard reset bluetooth sau khi service dừng/crash để clear stale BlueZ state
