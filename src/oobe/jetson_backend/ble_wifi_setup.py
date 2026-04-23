@@ -1354,12 +1354,15 @@ class BLEServer:
         return None
 
     def _reset_bluetooth(self):
-        """Hard-reset the BLE adapter to clear stale state from previous runs/crashes."""
+        """Power-cycle the BLE adapter to clear stale state from previous runs.
+
+        Dùng bluetoothctl (không dùng hciconfig) để BlueZ daemon giữ đồng bộ
+        với adapter. hciconfig reset chỉ dùng ở ExecStopPost khi BlueZ không
+        cần track state nữa.
+        """
         import subprocess
         try:
-            # hciconfig reset clears stale GATT/advertisement registrations
-            # that survive a bluetoothctl power cycle
-            subprocess.run(["hciconfig", "hci0", "reset"], timeout=5,
+            subprocess.run(["bluetoothctl", "power", "off"], timeout=5,
                            capture_output=True)
             time.sleep(1)
             subprocess.run(["bluetoothctl", "power", "on"], timeout=5,
