@@ -64,7 +64,7 @@ from config import (
 # Import các module khác
 from wifi_manager import (
     check_internet_connection, connect_wifi, scan_wifi_networks,
-    get_network_status, setup_network_connection
+    is_open_network, get_network_status, setup_network_connection
 )
 from gpio_handler import get_gpio_handler
 
@@ -886,8 +886,11 @@ class WiFiSetupHandler:
         self._connect_thread: Optional[threading.Thread] = None
 
     def set_ssid(self, ssid: str):
-        """Nhận SSID từ BLE."""
+        """Nhận SSID từ BLE. Tự detect open WiFi để connect không cần password."""
         self.ssid = ssid
+        if self.password is None and is_open_network(ssid):
+            logger.info(f"Mạng '{ssid}' không có mật khẩu, connect trực tiếp")
+            self.password = ""
         self._try_connect()
 
     def set_password(self, password: str):

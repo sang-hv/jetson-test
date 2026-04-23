@@ -278,6 +278,37 @@ def get_network_status(net_type: str = None) -> dict:
     return result
 
 
+def is_open_network(ssid: str) -> bool:
+    """
+    Kiểm tra nhanh xem mạng WiFi có phải open (không mật khẩu) không.
+
+    Dùng kết quả scan cache của nmcli (không rescan) để tránh chậm.
+
+    Args:
+        ssid: Tên mạng WiFi cần kiểm tra
+
+    Returns:
+        bool: True nếu mạng không có mật khẩu
+    """
+    try:
+        cmd = [
+            "nmcli", "-t", "-f", "SSID,SECURITY",
+            "device", "wifi", "list"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[0] == ssid:
+                    security = parts[1].strip()
+                    is_open = security == '' or security.lower() == 'open'
+                    logger.info(f"Kiểm tra security '{ssid}': '{security}' → {'open' if is_open else 'protected'}")
+                    return is_open
+    except Exception as e:
+        logger.warning(f"Lỗi khi kiểm tra security của '{ssid}': {e}")
+    return False
+
+
 def scan_wifi_networks() -> List[dict]:
     """
     Quét và trả về danh sách các mạng WiFi khả dụng.
