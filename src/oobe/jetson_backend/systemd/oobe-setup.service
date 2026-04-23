@@ -40,6 +40,12 @@ RestartSec=5
 # Timeout khởi động (30 giây)
 TimeoutStartSec=30
 
+# Tắt systemd watchdog — service dùng idle watchdog nội bộ (10 phút)
+WatchdogSec=0
+
+# Hard reset bluetooth sau khi service dừng/crash để clear stale BlueZ state
+ExecStopPost=/bin/bash -c 'hciconfig hci0 reset 2>/dev/null; sleep 1; bluetoothctl power on 2>/dev/null'
+
 # Environment variables
 Environment=PYTHONUNBUFFERED=1
 # Lưu ý: Không cần DBUS_SESSION_BUS_ADDRESS vì script sử dụng SystemBus

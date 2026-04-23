@@ -1354,10 +1354,12 @@ class BLEServer:
         return None
 
     def _reset_bluetooth(self):
-        """Power-cycle the BLE adapter to clear stale state from previous runs."""
+        """Hard-reset the BLE adapter to clear stale state from previous runs/crashes."""
         import subprocess
         try:
-            subprocess.run(["bluetoothctl", "power", "off"], timeout=5,
+            # hciconfig reset clears stale GATT/advertisement registrations
+            # that survive a bluetoothctl power cycle
+            subprocess.run(["hciconfig", "hci0", "reset"], timeout=5,
                            capture_output=True)
             time.sleep(1)
             subprocess.run(["bluetoothctl", "power", "on"], timeout=5,
@@ -1385,7 +1387,8 @@ class BLEServer:
                 return False
                 
             logger.info(f"Sử dụng adapter: {adapter_path}")
-            
+            self.adapter = adapter_path
+
             adapter_props = dbus.Interface(
                 self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
                 DBUS_PROP_IFACE
@@ -1462,13 +1465,57 @@ class BLEServer:
             return False
             
     def stop(self):
-        """Dừng BLE Server."""
+        """Dừng BLE Server và cleanup BlueZ registrations."""
         logger.info("Đang dừng BLE Server...")
         if self._idle_source_id is not None:
             GLib.source_remove(self._idle_source_id)
             self._idle_source_id = None
+
+        # Unregister advertisement và GATT app khỏi BlueZ
+        # để tránh stale state khi service restart
+        self._cleanup_bluez()
+
         if self.mainloop and self.mainloop.is_running():
             self.mainloop.quit()
+
+    def _cleanup_bluez(self):
+        """Unregister GATT application và advertisement khỏi BlueZ."""
+        if not self.bus or not self.adapter:
+            # adapter chưa được lưu, tìm lại
+            try:
+                adapter_path = self._find_adapter()
+            except Exception:
+                adapter_path = None
+        else:
+            adapter_path = self.adapter
+
+        if not adapter_path or not self.bus:
+            logger.warning("Không thể cleanup BlueZ: thiếu adapter hoặc bus")
+            return
+
+        # Unregister advertisement
+        if self.advertisement:
+            try:
+                ad_manager = dbus.Interface(
+                    self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
+                    LE_ADVERTISING_MANAGER_IFACE
+                )
+                ad_manager.UnregisterAdvertisement(self.advertisement.get_path())
+                logger.info("Đã unregister advertisement")
+            except Exception as e:
+                logger.warning(f"Unregister advertisement failed: {e}")
+
+        # Unregister GATT application
+        if self.app:
+            try:
+                gatt_manager = dbus.Interface(
+                    self.bus.get_object(BLUEZ_SERVICE_NAME, adapter_path),
+                    GATT_MANAGER_IFACE
+                )
+                gatt_manager.UnregisterApplication(self.app.get_path())
+                logger.info("Đã unregister GATT application")
+            except Exception as e:
+                logger.warning(f"Unregister GATT application failed: {e}")
 
 
 # =============================================================================
@@ -1506,33 +1553,40 @@ def should_start_ble_setup() -> bool:
     return False
 
 
+_server: Optional['BLEServer'] = None
+
+
 def signal_handler(signum, frame):
-    """Xử lý signal để dừng gracefully."""
-    logger.info(f"Nhận signal {signum}, đang thoát...")
+    """Xử lý signal để dừng gracefully với cleanup BlueZ."""
+    logger.info(f"Nhận signal {signum}, đang cleanup và thoát...")
+    if _server is not None:
+        _server.stop()
     sys.exit(0)
 
 
 def main():
     """Hàm main - Entry point của script."""
-    # Đăng ký signal handlers
+    global _server
+
+    # Đăng ký signal handlers (bao gồm SIGABRT từ systemd watchdog)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     logger.info("=" * 60)
     logger.info("OOBE WiFi Setup - Jetson AI Kit")
     logger.info("=" * 60)
-    
+
     # Kiểm tra xem có cần khởi động BLE Setup không
     if not should_start_ble_setup():
         logger.info("Đã có internet và không có yêu cầu Reset - Thoát")
         logger.info("Để force khởi động BLE Setup, chạy với tham số --force")
-        
+
         # Cho phép force start với tham số --force
         if len(sys.argv) > 1 and sys.argv[1] == "--force":
             logger.info("Force start được kích hoạt")
         else:
             return
-    
+
     # Kiểm tra D-Bus
     if not DBUS_AVAILABLE:
         logger.error("=" * 60)
@@ -1541,12 +1595,12 @@ def main():
         logger.error("Để chạy script này, cần cài đặt:")
         logger.error("  sudo apt-get install python3-dbus python3-gi")
         logger.error("=" * 60)
-        
+
         # Chế độ mock cho development
         logger.info("")
         logger.info("Chạy ở chế độ MOCK cho development...")
         logger.info("BLE Server sẽ không thực sự hoạt động.")
-        
+
         # Giữ script chạy để test
         try:
             while True:
@@ -1554,16 +1608,16 @@ def main():
         except KeyboardInterrupt:
             pass
         return
-    
+
     # Khởi động BLE Server
-    server = BLEServer()
+    _server = BLEServer()
     try:
-        server.start()
+        _server.start()
     except KeyboardInterrupt:
         pass
     finally:
-        server.stop()
-        
+        _server.stop()
+
     logger.info("OOBE Setup đã kết thúc")
 
 
