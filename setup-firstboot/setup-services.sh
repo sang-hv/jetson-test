@@ -247,7 +247,8 @@ chmod -R 777 /data/mini-pc/db
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
 cp "$SCRIPT_DIR/scripts/cleanup-detections.sh" /opt/device/cleanup-detections.sh
-chmod +x /opt/device/sync-config.py /opt/device/device-update.py /opt/device/cleanup-detections.sh
+cp "$SCRIPT_DIR/scripts/update-cloudflared.sh" /opt/device/update-cloudflared.sh
+chmod +x /opt/device/sync-config.py /opt/device/device-update.py /opt/device/cleanup-detections.sh /opt/device/update-cloudflared.sh
 
 cp "$SCRIPT_DIR/services/cleanup-detections.service" /etc/systemd/system/cleanup-detections.service
 cp "$SCRIPT_DIR/services/cleanup-detections.timer" /etc/systemd/system/cleanup-detections.timer
@@ -270,6 +271,14 @@ if crontab -l 2>/dev/null | grep -q "device-update.py"; then
 else
     (crontab -l 2>/dev/null; echo "$DEVICE_UPDATE_CRON_LINE") | crontab -
     log "device-update cronjob installed"
+fi
+
+CLOUDFLARED_UPDATE_CRON_LINE="0 3 */7 * * /opt/device/update-cloudflared.sh >> /var/log/update-cloudflared.log 2>&1"
+if crontab -l 2>/dev/null | grep -q "update-cloudflared"; then
+    log "cloudflared update cronjob already exists"
+else
+    (crontab -l 2>/dev/null; echo "$CLOUDFLARED_UPDATE_CRON_LINE") | crontab -
+    log "cloudflared update cronjob installed (weekly at 3:00 AM)"
 fi
 
 if [ -n "$DEVICE_ID" ] && [ -n "$BACKEND_URL" ] && [ -n "$SECRET_KEY" ]; then
