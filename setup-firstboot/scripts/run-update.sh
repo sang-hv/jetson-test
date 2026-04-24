@@ -202,26 +202,33 @@ main() {
     current_version=$(git_safe describe --tags --always 2>/dev/null || echo "unknown")
     log "Current version: $current_version"
 
-    # --- Git fetch & checkout branch ---
+    # --- Git fetch & checkout ---
     log "Fetching from origin..."
-    if ! git_safe fetch origin 2>&1 | _emit; then
+    if ! git_safe fetch origin --tags 2>&1 | _emit; then
         err "git fetch failed"
         ack_backend "git fetch failed"
         exit 1
     fi
 
-    log "Checking out branch $VERSION..."
+    # Checkout branch/tag — nếu branch chưa tồn tại local (repo mới),
+    # tạo từ remote tracking branch
+    log "Checking out $VERSION..."
     if ! git_safe checkout "$VERSION" 2>&1 | _emit; then
-        err "git checkout $VERSION failed"
-        ack_backend "git checkout $VERSION failed"
-        exit 1
+        log "Branch local chưa có, tạo từ origin/$VERSION..."
+        if ! git_safe checkout -B "$VERSION" "origin/$VERSION" 2>&1 | _emit; then
+            err "git checkout $VERSION failed"
+            ack_backend "git checkout $VERSION failed"
+            exit 1
+        fi
     fi
 
-    log "Pulling latest from origin/$VERSION..."
-    if ! git_safe pull origin "$VERSION" 2>&1 | _emit; then
-        err "git pull origin $VERSION failed"
-        ack_backend "git pull origin $VERSION failed"
-        exit 1
+    # Force sync với remote — hoạt động kể cả khi history khác nhau
+    # (ví dụ: đổi git_url sang repo mới)
+    if git_safe rev-parse --verify "origin/$VERSION" >/dev/null 2>&1; then
+        log "Syncing to origin/$VERSION..."
+        git_safe reset --hard "origin/$VERSION" 2>&1 | _emit
+    else
+        log "$VERSION là tag, đã đúng sau fetch"
     fi
 
     # Verify checkout
