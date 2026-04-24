@@ -184,9 +184,45 @@ def _validate_token(token: str, device_id: str, secret_key: str) -> tuple[int, s
 # HTTP handler
 # ---------------------------------------------------------------------------
 
+class _ConfigHolder:
+    """Holds device_id and secret_key, auto-reloads from DB every RELOAD_INTERVAL."""
+
+    RELOAD_INTERVAL = 60  # seconds
+
+    def __init__(self) -> None:
+        self.device_id: str = ""
+        self.secret_key: str = ""
+        self._last_reload: float = 0
+        self._lock = threading.Lock()
+
+    def load(self) -> None:
+        """Force load from disk/DB."""
+        self.device_id = _load_device_id()
+        self.secret_key = _load_secret_key()
+        self._last_reload = datetime.now(tz=timezone.utc).timestamp()
+        log.info("Config loaded: device_id=%s", self.device_id or "(empty)")
+
+    def get(self) -> tuple[str, str]:
+        """Return (device_id, secret_key), reload if stale."""
+        now = datetime.now(tz=timezone.utc).timestamp()
+        if now - self._last_reload > self.RELOAD_INTERVAL:
+            with self._lock:
+                # Double-check after acquiring lock
+                if now - self._last_reload > self.RELOAD_INTERVAL:
+                    old_key = self.secret_key
+                    self.device_id = _load_device_id()
+                    self.secret_key = _load_secret_key()
+                    self._last_reload = now
+                    if self.secret_key != old_key:
+                        log.info("secret_key changed — clearing token cache")
+                        _cache.__init__()
+        return self.device_id, self.secret_key
+
+
+_config = _ConfigHolder()
+
+
 class AuthHandler(BaseHTTPRequestHandler):
-    device_id: str = ""
-    secret_key: str = ""
 
     def log_message(self, fmt: str, *args: object) -> None:
         pass
@@ -219,7 +255,8 @@ class AuthHandler(BaseHTTPRequestHandler):
             self._respond(401, "missing token")
             return
 
-        status, reason = _validate_token(token, self.device_id, self.secret_key)
+        device_id, secret_key = _config.get()
+        status, reason = _validate_token(token, device_id, secret_key)
         if status != 200:
             log.warning("Auth denied [%d] %s — %s", status, original_uri, reason)
         self._respond(status, reason)
@@ -240,18 +277,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.getenv("STREAM_AUTH_PORT", "8091")))
     args = parser.parse_args()
 
-    device_id  = _load_device_id()
-    secret_key = _load_secret_key()
+    _config.load()
 
-    if not device_id:
+    if not _config.device_id:
         log.error("DEVICE_ID not found — requests will be rejected with 403")
-    if not secret_key:
+    if not _config.secret_key:
         log.error("stream_secret_key not found in DB — requests will be rejected with 401")
 
-    log.info("device_id=%s  db=%s", device_id or "(empty)", DB_PATH)
-
-    AuthHandler.device_id  = device_id
-    AuthHandler.secret_key = secret_key
+    log.info("device_id=%s  db=%s  reload_interval=%ds",
+             _config.device_id or "(empty)", DB_PATH, _config.RELOAD_INTERVAL)
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), AuthHandler)
     log.info("Stream auth listening on http://127.0.0.1:%d/verify", args.port)
