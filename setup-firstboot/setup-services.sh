@@ -273,7 +273,7 @@ else
     log "device-update cronjob installed"
 fi
 
-CLOUDFLARED_UPDATE_CRON_LINE="0 3 */7 * * /opt/device/update-cloudflared.sh >> /var/log/update-cloudflared.log 2>&1"
+CLOUDFLARED_UPDATE_CRON_LINE="0 3 */7 * * /opt/device/update-cloudflared.sh >/dev/null 2>&1"
 if crontab -l 2>/dev/null | grep -q "update-cloudflared"; then
     log "cloudflared update cronjob already exists"
 else
