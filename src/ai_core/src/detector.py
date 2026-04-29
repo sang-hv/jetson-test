@@ -175,11 +175,18 @@ class PersonDetector:
 
             # boxes.id is None if no tracks are assigned yet
             if boxes is not None and boxes.id is not None:
-                for i in range(len(boxes)):
-                    track_id = int(boxes.id[i].item())
-                    bbox = boxes.xyxy[i].cpu().numpy()  # [x1, y1, x2, y2]
-                    conf = float(boxes.conf[i].item())
-                    cls_id = int(boxes.cls[i].item())
+                # Batch GPU→CPU sync once instead of per-box .item() calls.
+                # On Jetson each .item() costs ~50-200µs of sync overhead.
+                ids = boxes.id.cpu().numpy().astype(int)
+                xyxys = boxes.xyxy.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                classes = boxes.cls.cpu().numpy().astype(int)
+
+                for i in range(len(ids)):
+                    track_id = int(ids[i])
+                    bbox = xyxys[i]
+                    conf = float(confs[i])
+                    cls_id = int(classes[i])
 
                     if cls_id == self.PERSON_CLASS_ID:
                         tracked_persons.append(
@@ -234,15 +241,15 @@ class PersonDetector:
             boxes = results[0].boxes
 
             if boxes is not None and len(boxes) > 0:
-                for i in range(len(boxes)):
-                    bbox = boxes.xyxy[i].cpu().numpy()
-                    conf = float(boxes.conf[i].item())
-
+                # Batch GPU→CPU sync — see detect_and_track for rationale.
+                xyxys = boxes.xyxy.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                for i in range(len(xyxys)):
                     tracked_persons.append(
                         TrackedPerson(
                             track_id=i,  # Just use detection index
-                            bbox=bbox,
-                            confidence=conf,
+                            bbox=xyxys[i],
+                            confidence=float(confs[i]),
                         )
                     )
 

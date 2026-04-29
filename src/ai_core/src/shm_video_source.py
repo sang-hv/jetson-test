@@ -185,7 +185,7 @@ class SharedMemoryVideoSource:
                     logger.info("SharedMemoryVideoSource frame size: %dx%d", w, h)
                 return True, frame
 
-            time.sleep(0.0005)
+            time.sleep(0.005)
 
         # No new frame within timeout; try reconnect to catch writer restart.
         self._maybe_reconnect()

@@ -338,20 +338,15 @@ def draw_info_overlay(
         info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
     )
 
-    # Create semi-transparent background overlay
+    # Semi-transparent background — blend only the ROI rectangle, not the
+    # entire frame. Saves ~2.7MB/copy at 720p versus full-frame addWeighted.
     padding = 10
-    overlay = frame.copy()
-    cv2.rectangle(
-        overlay,
-        (5, 5),
-        (text_w + padding * 2 + 5, text_h + padding * 2 + 5),
-        (0, 0, 0),
-        -1,
-    )
-
-    # Blend with original (semi-transparent)
+    x1, y1 = 5, 5
+    x2 = text_w + padding * 2 + 5
+    y2 = text_h + padding * 2 + 5
     alpha = 0.6
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+    roi = frame[y1:y2, x1:x2]
+    cv2.addWeighted(np.zeros_like(roi), alpha, roi, 1 - alpha, 0, dst=roi)
 
     # Draw text
     cv2.putText(
@@ -465,7 +460,11 @@ def draw_in_zone_overlay(
     color: Tuple[int, int, int] = (0, 255, 0),
     alpha: float = 0.15,
 ) -> np.ndarray:
-    """Draw a semi-transparent overlay on the IN zone side of the counting line."""
+    """Draw a semi-transparent overlay on the IN zone side of the counting line.
+
+    Uses the polygon's bounding-rect ROI for blending instead of the whole
+    frame to save memory bandwidth at 720p+.
+    """
     h, w = frame.shape[:2]
     in_sign = _cross_sign_px(pt1, pt2, in_point)
     if in_sign == 0:
@@ -476,7 +475,6 @@ def draw_in_zone_overlay(
     in_corners = [c for c in corners if _cross_sign_px(pt1, pt2, c) == in_sign]
 
     # Build polygon: pt1 -> in-side corners (sorted by angle) -> pt2
-    # Sort corners clockwise around centroid of the polygon
     all_pts = [pt1] + in_corners + [pt2]
     cx = sum(p[0] for p in all_pts) / len(all_pts)
     cy = sum(p[1] for p in all_pts) / len(all_pts)
@@ -484,9 +482,21 @@ def draw_in_zone_overlay(
     all_pts.sort(key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
 
     polygon = np.array(all_pts, dtype=np.int32)
-    overlay = frame.copy()
-    cv2.fillPoly(overlay, [polygon], color)
-    return cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+    # Compute polygon bbox to limit blend to ROI
+    rx1 = max(0, int(polygon[:, 0].min()))
+    ry1 = max(0, int(polygon[:, 1].min()))
+    rx2 = min(w, int(polygon[:, 0].max()) + 1)
+    ry2 = min(h, int(polygon[:, 1].max()) + 1)
+    if rx2 <= rx1 or ry2 <= ry1:
+        return frame
+
+    roi = frame[ry1:ry2, rx1:rx2]
+    overlay = roi.copy()
+    shifted = polygon - np.array([rx1, ry1], dtype=np.int32)
+    cv2.fillPoly(overlay, [shifted], color)
+    cv2.addWeighted(overlay, alpha, roi, 1 - alpha, 0, dst=roi)
+    return frame
 
 
 def draw_detection_zone(
@@ -496,16 +506,18 @@ def draw_detection_zone(
     thickness: int = 2,
     alpha: float = 0.08,
 ) -> np.ndarray:
-    """Draw the detection zone rectangle with a subtle fill overlay."""
+    """Draw the detection zone rectangle with a subtle fill overlay (ROI-blend)."""
     h, w = frame.shape[:2]
-    x1 = int(zone[0] * w)
-    y1 = int(zone[1] * h)
-    x2 = int(zone[2] * w)
-    y2 = int(zone[3] * h)
+    x1 = max(0, int(zone[0] * w))
+    y1 = max(0, int(zone[1] * h))
+    x2 = min(w, int(zone[2] * w))
+    y2 = min(h, int(zone[3] * h))
 
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+    if x2 > x1 and y2 > y1:
+        roi = frame[y1:y2, x1:x2]
+        # Solid color overlay of zone size, then blend with ROI only
+        color_arr = np.full_like(roi, color, dtype=np.uint8)
+        cv2.addWeighted(color_arr, alpha, roi, 1 - alpha, 0, dst=roi)
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
@@ -523,16 +535,17 @@ def draw_restricted_zone(
     thickness: int = 2,
     alpha: float = 0.15,
 ) -> np.ndarray:
-    """Draw the restricted zone rectangle with a semi-transparent red fill."""
+    """Draw the restricted zone rectangle with a semi-transparent red fill (ROI-blend)."""
     h, w = frame.shape[:2]
-    x1 = int(zone[0] * w)
-    y1 = int(zone[1] * h)
-    x2 = int(zone[2] * w)
-    y2 = int(zone[3] * h)
+    x1 = max(0, int(zone[0] * w))
+    y1 = max(0, int(zone[1] * h))
+    x2 = min(w, int(zone[2] * w))
+    y2 = min(h, int(zone[3] * h))
 
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+    if x2 > x1 and y2 > y1:
+        roi = frame[y1:y2, x1:x2]
+        color_arr = np.full_like(roi, color, dtype=np.uint8)
+        cv2.addWeighted(color_arr, alpha, roi, 1 - alpha, 0, dst=roi)
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
@@ -592,10 +605,10 @@ def draw_counting_info(
     x2 = frame_w - 5
     y2 = text_h + padding * 2 + 5
 
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), -1)
+    # ROI-only blend (avoid full-frame copy)
     alpha = 0.6
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+    roi = frame[y1:y2, x1:x2]
+    cv2.addWeighted(np.zeros_like(roi), alpha, roi, 1 - alpha, 0, dst=roi)
 
     cv2.putText(
         frame,
