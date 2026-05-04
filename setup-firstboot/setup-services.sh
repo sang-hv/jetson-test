@@ -244,6 +244,23 @@ chmod 600 /etc/device/device.env
 chmod a+r /etc/device/device.env
 chmod -R 777 /data/mini-pc/db
 
+# Re-provisioning (cloned image, new identity): wipe stale cloudflared
+# state so sync-config takes the "first run" path with the fresh token.
+# Without this, the cloned systemd unit / connector cert from the source
+# device keeps the tunnel pinned to the old token and cloudflared fails.
+if [ "$FORCE_DEVICE_ENV" = "1" ]; then
+    log "Re-provisioning detected (--prompt-device-env): cleaning cloudflared state"
+    systemctl stop cloudflared 2>/dev/null || true
+    if command -v cloudflared >/dev/null 2>&1; then
+        cloudflared service uninstall 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/cloudflared.service
+    rm -rf /etc/cloudflared /var/lib/cloudflared /root/.cloudflared
+    rm -f /etc/device/config.prev.json /etc/device/config.json
+    systemctl daemon-reload
+    log "Cloudflared state wiped — sync-config will reinstall with new token"
+fi
+
 cp "$SCRIPT_DIR/scripts/sync-config.py" /opt/device/sync-config.py
 cp "$SCRIPT_DIR/scripts/device-update.py" /opt/device/device-update.py
 cp "$SCRIPT_DIR/scripts/cleanup-detections.sh" /opt/device/cleanup-detections.sh
@@ -474,6 +491,10 @@ if [ "$RESTART_MODE" = "all" ]; then
         # ExecStartPre restarts bluetooth and waits for BlueZ DBus, which
         # can race with the cluster of restarts happening here.
         [ "$svc" = "oobe-setup" ] && continue
+        # Defer cloudflared: on re-provisioning the systemd unit may have
+        # just been wiped/recreated by sync-config; restart only after
+        # daemon-reload has settled below.
+        [ "$svc" = "cloudflared" ] && continue
         restart_service "$svc"
     done < <(get_valid_services)
     for f in "$SERVICES_DIR"/*.timer; do
@@ -485,6 +506,12 @@ if [ "$RESTART_MODE" = "all" ]; then
             || err "Failed to restart $_timer"
     done
     sleep 3
+    systemctl daemon-reload
+    if [ -f /etc/systemd/system/cloudflared.service ]; then
+        restart_service "cloudflared"
+    else
+        warn "cloudflared.service not present yet — will be installed by next sync-config run"
+    fi
     restart_service "oobe-setup"
     log "All services restarted"
 elif [ "$RESTART_MODE" = "specific" ]; then
