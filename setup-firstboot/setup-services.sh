@@ -470,6 +470,10 @@ log "Phase 2 complete: files and services configured"
 if [ "$RESTART_MODE" = "all" ]; then
     step "Restarting all services"
     while IFS= read -r svc; do
+        # Defer oobe-setup until after everything else is settled — its
+        # ExecStartPre restarts bluetooth and waits for BlueZ DBus, which
+        # can race with the cluster of restarts happening here.
+        [ "$svc" = "oobe-setup" ] && continue
         restart_service "$svc"
     done < <(get_valid_services)
     for f in "$SERVICES_DIR"/*.timer; do
@@ -480,6 +484,8 @@ if [ "$RESTART_MODE" = "all" ]; then
             && log "$_timer restarted" \
             || err "Failed to restart $_timer"
     done
+    sleep 3
+    restart_service "oobe-setup"
     log "All services restarted"
 elif [ "$RESTART_MODE" = "specific" ]; then
     step "Restarting requested services"

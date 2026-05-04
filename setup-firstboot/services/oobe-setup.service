@@ -9,7 +9,7 @@ User=root
 Group=root
 
 ExecStartPre=+/bin/systemctl restart bluetooth
-ExecStartPre=/bin/sleep 2
+ExecStartPre=+/bin/bash -c 'for i in $(seq 1 15); do busctl --system call org.bluez / org.freedesktop.DBus.ObjectManager GetManagedObjects >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 ExecStart=/usr/bin/python3 /opt/oobe-setup/ble_wifi_setup.py
 
 Restart=on-failure

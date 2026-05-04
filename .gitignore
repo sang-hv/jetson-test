@@ -10,3 +10,6 @@ src/ai_core/.env
 src/app.log
 .claude/
 .cursor/
+src/ai_core/*.pt
+src/ai_core/*.onnx
+src/ai_core/*.engine

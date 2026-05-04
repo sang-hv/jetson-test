@@ -75,8 +75,8 @@ for s in "${SYSTEM_SERVICES[@]}" "${USER_SERVICES[@]}"; do
 done
 
 for svc in "${SYSTEM_SERVICES[@]}"; do
-    state=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
-    enabled=$(systemctl is-enabled "$svc" 2>/dev/null || echo "unknown")
+    state=$(systemctl is-active "$svc" 2>/dev/null || true); state=${state:-unknown}
+    enabled=$(systemctl is-enabled "$svc" 2>/dev/null || true); enabled=${enabled:-unknown}
     case "$state" in
         active)   icon="$OK"   ;;
         inactive) icon="$WARN" ;;
@@ -89,9 +89,9 @@ done
 
 for svc in "${USER_SERVICES[@]}"; do
     state=$(sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$ACTUAL_UID" \
-        systemctl --user is-active "$svc" 2>/dev/null || echo "unknown")
+        systemctl --user is-active "$svc" 2>/dev/null || true); state=${state:-unknown}
     enabled=$(sudo -u "$ACTUAL_USER" XDG_RUNTIME_DIR="/run/user/$ACTUAL_UID" \
-        systemctl --user is-enabled "$svc" 2>/dev/null || echo "unknown")
+        systemctl --user is-enabled "$svc" 2>/dev/null || true); enabled=${enabled:-unknown}
     case "$state" in
         active)   icon="$OK"   ;;
         inactive) icon="$WARN" ;;
@@ -131,7 +131,7 @@ done
 section "CSI Camera"
 
 # Check nvargus-daemon
-nvargus_state=$(systemctl is-active nvargus-daemon 2>/dev/null || echo "unknown")
+nvargus_state=$(systemctl is-active nvargus-daemon 2>/dev/null || true); nvargus_state=${nvargus_state:-unknown}
 if [ "$nvargus_state" = "active" ]; then
     printf "  %b  nvargus-daemon          active\n" "$OK"
 else
