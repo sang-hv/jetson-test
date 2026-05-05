@@ -214,7 +214,38 @@ Password: 1
 
 > The new device has no network connection yet, so SSH is not available. You must operate directly via monitor + keyboard.
 
-**Step 5.** Run master setup
+**Step 5.** Connect to the network (REQUIRED before master setup)
+
+A cloned image does not carry WiFi credentials, so a freshly flashed device has no Internet access. Cloudflared needs Internet to bootstrap the tunnel — skipping this step will leave `cloudflared.service` in a failed state.
+
+**Option 1 — Plug in a LAN cable** (simplest): connect the Ethernet cable, the network is configured automatically. Skip the rest of this step and continue to step 6.
+
+**Option 2 — Connect via WiFi from the GUI** (the monitor and keyboard from step 3 are already attached):
+
+1. Click the network icon in the top-right corner of the screen (Network Manager)
+2. Select the WiFi SSID, enter the password
+3. Wait until the icon shows a successful connection
+4. Open a Terminal (`Ctrl + Alt + T`) and run the following command to make WiFi the preferred interface:
+
+   ```bash
+   sudo bash /opt/4g/switch-network.sh wifi
+   ```
+
+**Option 3 — Use 4G** (only if a SIM7600 module is attached and a SIM is inserted):
+
+```bash
+sudo bash /opt/4g/switch-network.sh 4g
+```
+
+Verify Internet connectivity:
+
+```bash
+ping -c 3 8.8.8.8
+```
+
+If the ping succeeds, continue to step 6.
+
+**Step 6.** Run master setup
 
 ```bash
 sudo bash mini-pc/setup-firstboot/master-setup.sh --prompt-device-env --restart-all
@@ -232,7 +263,7 @@ The script automatically runs:
 1. **install-software.sh** — installs packages, swap, go2rtc, cloudflared
 2. **setup-services.sh --restart-all** — deploys files, enables and restarts all services
 
-**Step 6.** Check status
+**Step 7.** Check status
 
 ```bash
 sudo bash mini-pc/setup-firstboot/scripts/check-status.sh
@@ -288,7 +319,7 @@ Expected result — all services **active** and hardware detected:
   Backend URL:  https://avis-api-dev.aivis-camera.ai
 ```
 
-**Step 7.** Change the password
+**Step 8.** Change the password
 
 After confirming everything works, **you must** change the default password:
 

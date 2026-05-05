@@ -214,7 +214,38 @@ Password: 1
 
 > 新しいデバイスはネットワーク接続がないため、SSHは使用できません。モニター + キーボードで直接操作する必要があります。
 
-**ステップ5.** マスターセットアップを実行
+**ステップ5.** ネットワーク接続（マスターセットアップ前に必須）
+
+クローンイメージにはWiFi認証情報が含まれていないため、新しくフラッシュしたデバイスにはインターネット接続がありません。Cloudflaredはトンネル初期化のためインターネットを必要とします — このステップをスキップすると `cloudflared.service` が失敗状態になります。
+
+**方法1 — LANケーブル接続**（最も簡単）：イーサネットケーブルを接続するだけで、ネットワークは自動的に設定されます。残りはスキップしてステップ6へ。
+
+**方法2 — GUIからWiFi接続**（ステップ3でモニターとキーボードを既に接続済み）：
+
+1. 画面右上のネットワークアイコン（Network Manager）をクリック
+2. 接続したいWiFiのSSIDを選択し、パスワードを入力
+3. アイコンが接続済み表示になるまで待つ
+4. ターミナルを開き（`Ctrl + Alt + T`）、WiFiを優先インターフェースに設定するコマンドを実行：
+
+   ```bash
+   sudo bash /opt/4g/switch-network.sh wifi
+   ```
+
+**方法3 — 4G利用**（SIM7600モジュール装着＋SIM挿入時のみ）：
+
+```bash
+sudo bash /opt/4g/switch-network.sh 4g
+```
+
+インターネット接続を確認：
+
+```bash
+ping -c 3 8.8.8.8
+```
+
+ping成功を確認したらステップ6へ。
+
+**ステップ6.** マスターセットアップを実行
 
 ```bash
 sudo bash mini-pc/setup-firstboot/master-setup.sh --prompt-device-env --restart-all
@@ -232,7 +263,7 @@ SECRET_KEY (hidden): ••••••••••
 1. **install-software.sh** — パッケージ、スワップ、go2rtc、cloudflaredをインストール
 2. **setup-services.sh --restart-all** — ファイルをデプロイし、すべてのサービスを有効化・再起動
 
-**ステップ6.** ステータス確認
+**ステップ7.** ステータス確認
 
 ```bash
 sudo bash mini-pc/setup-firstboot/scripts/check-status.sh
@@ -288,7 +319,7 @@ sudo bash mini-pc/setup-firstboot/scripts/check-status.sh
   Backend URL:  https://avis-api-dev.aivis-camera.ai
 ```
 
-**ステップ7.** パスワードを変更
+**ステップ8.** パスワードを変更
 
 すべてが正常に動作していることを確認後、デフォルトパスワードを**必ず**変更してください：
 

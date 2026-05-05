@@ -214,7 +214,38 @@ Password: 1
 
 > Thiết bị mới chưa có kết nối mạng nên chưa thể SSH. Phải thao tác trực tiếp qua màn hình + bàn phím.
 
-**Bước 5.** Chạy master setup
+**Bước 5.** Kết nối mạng (BẮT BUỘC trước khi chạy master setup)
+
+Image clone không giữ lại WiFi credentials, vì vậy thiết bị mới sẽ không có Internet. Cloudflared cần Internet để khởi tạo tunnel — nếu bỏ qua bước này, `cloudflared.service` sẽ fail.
+
+**Cách 1 — Cắm cáp LAN** (đơn giản nhất): cắm cáp LAN vào cổng Ethernet, mạng sẽ được cấu hình tự động. Bỏ qua phần còn lại của bước này, sang bước 6.
+
+**Cách 2 — Kết nối WiFi qua GUI** (vì đã cắm sẵn màn hình + bàn phím ở bước 3):
+
+1. Click icon mạng ở góc trên/phải màn hình (Network Manager)
+2. Chọn tên WiFi muốn kết nối, nhập password
+3. Đợi đến khi icon mạng hiển thị đã kết nối thành công
+4. Mở Terminal (`Ctrl + Alt + T`) và chạy lệnh sau để đặt WiFi làm interface ưu tiên:
+
+   ```bash
+   sudo bash /opt/4g/switch-network.sh wifi
+   ```
+
+**Cách 3 — Dùng 4G** (nếu có gắn module SIM7600 và đã cắm SIM):
+
+```bash
+sudo bash /opt/4g/switch-network.sh 4g
+```
+
+Kiểm tra Internet đã có:
+
+```bash
+ping -c 3 8.8.8.8
+```
+
+Nếu ping thành công, sang bước 6.
+
+**Bước 6.** Chạy master setup
 
 ```bash
 sudo bash mini-pc/setup-firstboot/master-setup.sh --prompt-device-env --restart-all
@@ -232,7 +263,7 @@ Script tự động chạy:
 1. **install-software.sh** — cài đặt packages, swap, go2rtc, cloudflared
 2. **setup-services.sh --restart-all** — deploy files, enable và restart tất cả services
 
-**Bước 6.** Kiểm tra trạng thái
+**Bước 7.** Kiểm tra trạng thái
 
 ```bash
 sudo bash mini-pc/setup-firstboot/scripts/check-status.sh
@@ -288,7 +319,7 @@ Kết quả mong đợi — tất cả services **active** và phần cứng đ�
   Backend URL:  https://avis-api-dev.aivis-camera.ai
 ```
 
-**Bước 7.** Đổi password
+**Bước 8.** Đổi password
 
 Sau khi xác nhận mọi thứ hoạt động, **bắt buộc** đổi password mặc định:
 
