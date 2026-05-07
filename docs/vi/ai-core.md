@@ -26,43 +26,47 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Tạo thư mục `known_faces/` chứa ảnh tham chiếu, mỗi người 1 thư mục con:
+### Cấu hình nguồn known faces (SQLite database)
 
+AI Core lấy embeddings khuôn mặt đã tính sẵn từ SQLite database của `logic_service`
+
+Cấu hình trong file `.env` của `src/ai_core/`:
+
+```env
+# Lấy known faces từ SQLite database thay vì folder
+FACE_DB_SOURCE=sqlite
+
+# Đường dẫn tới file SQLite chứa bảng face embeddings
+FACE_DB_PATH=logic_service/logic_service.db
 ```
-known_faces/
-├── Alice/
-│   ├── photo1.jpg
-│   └── photo2.jpg
-└── Bob/
-    └── selfie.jpg
-```
+
+> Embeddings trong DB được sinh ra bởi `logic_service` khi đăng ký người dùng (qua admin/app). AI Core chỉ đọc, không ghi vào DB.
 
 ### Lệnh chạy test
 
 ```bash
 # Chạy cơ bản với webcam (camera index 0)
-python main.py --source 0 --known_dir known_faces
+python main.py --source 0
 ```
 
 Một số ví dụ khác:
 
 ```bash
 # Chạy với CUDA (Jetson)
-python main.py --source 0 --known_dir known_faces --device cuda
+python main.py --source 0 --device cuda
 
 # Chạy với video file
-python main.py --source video.mp4 --known_dir known_faces --device cuda
+python main.py --source video.mp4 --device cuda
 
 # Tinh chỉnh threshold matching khuôn mặt (0.0 - 1.0, mặc định 0.45)
-python main.py --source 0 --known_dir known_faces --threshold 0.5
+python main.py --source 0 --threshold 0.5
 
 # Giảm độ phân giải để chạy nhanh hơn trên CPU
-python main.py --source 0 --known_dir known_faces --cam_width 640 --cam_height 480
+python main.py --source 0 --cam_width 640 --cam_height 480
 ```
 
 Phím điều khiển:
 - `q` — Thoát
-- `r` — Reload database known faces (sau khi thêm ảnh mới)
 
 Xem chi tiết các option còn lại tại [src/ai_core/README.md](../../src/ai_core/README.md).
 
