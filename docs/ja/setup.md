@@ -1,12 +1,13 @@
 # セットアップガイド
 
-AIVISカメラデバイスのセットアップは3つのフェーズで構成されます：
+AIVISカメラデバイスのセットアップは3つのメインフェーズ（+ オプション1つ）で構成されます：
 
 | フェーズ | 内容 | 実施場所 |
 |---------|------|---------|
 | [Phase 1](#phase-1-aivis-adminでカメラを作成) | AIVIS Adminでカメラレコードを作成 | AIVIS Admin Web |
 | [Phase 2](#phase-2-cloudflareトンネルを作成) | Cloudflare Tunnelを作成し、ドメイン/トークンを更新 | Cloudflare Dashboard + AIVIS Admin |
 | [Phase 3](#phase-3-jetsonデバイスのインストールと設定) | Jetsonにソフトウェアをインストール | Jetson Orin Nano（直接操作） |
+| [Phase 4](#phase-4-イメージのクローン必要な場合) *(任意)* | NVMeを再利用可能なゴールデンイメージにクローン | Jetson Orin Nano |
 
 ---
 
@@ -167,9 +168,11 @@ Cloudflare Tunnelにより、バックエンドがパブリックIPやポート�
 
 **ステップ1.** システムイメージをダウンロード
 
-プロジェクトシートのリンクからシステムイメージをダウンロードします。
+以下のリンクからシステムイメージをダウンロードします：
 
-> イメージのダウンロードリンク、バックエンドドメイン、デフォルトアカウント情報などはプロジェクトシートに記載されています。アクセス権がない場合はプロジェクトマネージャーに連絡してください。
+[jetson-base.img.gz](https://dehasoftvn-my.sharepoint.com/:u:/r/personal/administrator_deha-soft_com/Documents/DEHA%20group/02.%20BOM/02.%20Head%20Office/01.%20JMU/05.%20JMU%20-%20Projects%20(B%E1%BA%A3o%20m%E1%BA%ADt)/TIMIMA01/05%20-%20Release/%E7%B4%8D%E5%93%81%E7%89%A9/Jetson%20Orin%20Nano%E7%94%A8%20%E3%82%BB%E3%83%83%E3%83%88%E3%82%A2%E3%83%83%E3%83%97%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/jetson-base.img.gz?csf=1&web=1&e=kbVSfc)
+
+> 上記リンクにアクセスできない場合はプロジェクトマネージャーに連絡してください。
 
 **ステップ2.** イメージをSSDに書き込み
 
@@ -337,6 +340,97 @@ passwd
 - `device-update.py`が5分ごとにハートビート（ソフトウェアバージョン）を送信
 - AIVIS Admin上のカメラステータスが**Online**に変更
 - ライブストリームにアクセス可能：`https://{device-id}.aivis-camera.ai`
+
+---
+
+## Phase 4: イメージのクローン（必要な場合）
+
+完全に設定済みのJetsonから「ゴールデンイメージ」を作成し、他のデバイスへ書き込んで再利用する場合にこのフェーズを使用します。デバイス固有のIDや状態を消去し、空き領域をゼロ埋めして（`pigz`の圧縮率を高めるため）、NVMeを外付けUSB SSD上の圧縮ファイルにクローンします。
+
+> すべてのコマンドはJetson上で直接実行します（モニター + キーボードまたはSSH経由）。すべての手順で`sudo`が必要です。
+
+### 必要なもの
+
+- 圧縮イメージを保存できる十分な容量のUSB SSD（256GB以上推奨）
+- クローン対象のNVMeから起動済みのJetson
+- セットアップが完了済み（`check-status.sh`ですべて正常）
+
+### 手順
+
+**ステップ1.** すべてのサービスを停止
+
+```bash
+sudo systemctl stop ai-core logic-service person-count-ws backchannel \
+                    stream-auth device-update-server cloudflared \
+                    go2rtc camera-stream 2>/dev/null
+```
+
+**ステップ2.** デバイスIDとcloudflared状態を消去
+
+```bash
+sudo rm -f /etc/device/device.env /etc/device/config.json /etc/device/config.prev.json
+sudo systemctl stop cloudflared 2>/dev/null
+sudo cloudflared service uninstall 2>/dev/null
+sudo rm -f /etc/systemd/system/cloudflared.service
+sudo rm -rf /etc/cloudflared /var/lib/cloudflared /root/.cloudflared
+```
+
+> `DEVICE_ID`、`BACKEND_URL`、`SECRET_KEY`、cloudflaredトンネル認証情報を削除し、クローンイメージを汎用ベースとして使用できるようにします。新しいデバイスごとに[Phase 1](#phase-1-aivis-adminでカメラを作成)と[Phase 2](#phase-2-cloudflareトンネルを作成)で再プロビジョニングが必要です。
+
+**ステップ3.** ランタイムデータを消去
+
+```bash
+sudo rm -rf /data/mini-pc/db/* /data/mini-pc/media/* /data/mini-pc/faces/* /data/mini-pc/logs/*
+sudo rm -rf /detection/* /dev/shm/mini_pc_ai_frames.bin
+```
+
+**ステップ4.** ログとjournalを消去
+
+```bash
+sudo journalctl --rotate && sudo journalctl --vacuum-time=1s
+sudo rm -rf /var/log/*.log /var/log/*.gz /var/log/*.[0-9] /var/log/journal/*
+```
+
+**ステップ5.** 空き領域をゼロ埋め（`pigz`圧縮率を30〜60%向上）
+
+```bash
+sudo dd if=/dev/zero of=/zero.fill bs=4M status=progress 2>/dev/null; sudo rm -f /zero.fill
+sync; sync
+```
+
+**ステップ6.** 保存先USB SSDをマウント
+
+USB SSDを接続し、フォーマットしてマウントします。事前に`lsblk`で**正しいデバイス名**を確認してください（以下の例では`sda1`）。
+
+```bash
+sudo mkdir -p /mnt/backup
+sudo mkfs.ext4 -F /dev/sda1
+sudo mount /dev/sda1 /mnt/backup
+```
+
+> `mkfs.ext4 -F`は`/dev/sda1`の中身をすべて消去します。誤ったディスクを消さないようデバイス名を必ず再確認してください。
+
+**ステップ7.** NVMeをUSB SSD上の圧縮ファイルへクローン
+
+`lsblk`で**正しいOSディスク名**を確認してください（通常は`nvme0n1`）：
+
+```bash
+sudo bash -c "dd if=/dev/nvme0n1 bs=4M status=progress | pigz > /mnt/backup/jetson-base.img.gz"
+```
+
+**ステップ8.** イメージサイズを確認
+
+```bash
+ls -lh /mnt/backup/jetson-base.img.gz
+```
+
+**ステップ9.** USB SSDをアンマウント
+
+```bash
+sudo umount /mnt/backup
+```
+
+生成された`jetson-base.img.gz`は、[Phase 3 - ステップ2](#手順-2)と同じコマンドで新しいSSDに書き込めます。
 
 ---
 

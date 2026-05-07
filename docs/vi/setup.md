@@ -1,12 +1,13 @@
 # Hướng dẫn cài đặt
 
-Quy trình cài đặt thiết bị AIVIS Camera gồm 3 phase:
+Quy trình cài đặt thiết bị AIVIS Camera gồm 3 phase chính (+ 1 tùy chọn):
 
 | Phase | Nội dung | Thực hiện trên |
 |-------|----------|----------------|
 | [Phase 1](#phase-1-tạo-camera-trên-aivis-admin) | Tạo bản ghi camera trên AIVIS Admin | AIVIS Admin Web |
 | [Phase 2](#phase-2-tạo-cloudflare-tunnel) | Tạo Cloudflare Tunnel và cập nhật domain/token | Cloudflare Dashboard + AIVIS Admin |
 | [Phase 3](#phase-3-cài-đặt-phần-mềm-trên-jetson) | Cài đặt phần mềm trên Jetson | Jetson Orin Nano (SSH) |
+| [Phase 4](#phase-4-clone-image-nếu-cần) *(tùy chọn)* | Clone NVMe sang golden image tái sử dụng | Jetson Orin Nano |
 
 ---
 
@@ -167,9 +168,11 @@ Trong popup "Install and run a connector", copy token từ dòng lệnh `cloudfl
 
 **Bước 1.** Download file image
 
-Download file image hệ thống từ link trong sheet thông tin dự án.
+Download file image hệ thống từ link sau:
 
-> Link download, domain backend, thông tin tài khoản mặc định,... được lưu trong sheet dự án. Liên hệ quản lý dự án nếu chưa có quyền truy cập.
+[jetson-base.img.gz](https://dehasoftvn-my.sharepoint.com/:u:/r/personal/administrator_deha-soft_com/Documents/DEHA%20group/02.%20BOM/02.%20Head%20Office/01.%20JMU/05.%20JMU%20-%20Projects%20(B%E1%BA%A3o%20m%E1%BA%ADt)/TIMIMA01/05%20-%20Release/%E7%B4%8D%E5%93%81%E7%89%A9/Jetson%20Orin%20Nano%E7%94%A8%20%E3%82%BB%E3%83%83%E3%83%88%E3%82%A2%E3%83%83%E3%83%97%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/jetson-base.img.gz?csf=1&web=1&e=kbVSfc)
+
+> Liên hệ quản lý dự án nếu chưa có quyền truy cập vào link trên.
 
 **Bước 2.** Ghi image vào SSD
 
@@ -337,6 +340,97 @@ Sau khi cài đặt thành công:
 - `device-update.py` gửi heartbeat (software version) mỗi 5 phút
 - Trạng thái camera trên AIVIS Admin chuyển sang **Online**
 - Live stream truy cập qua: `https://{device-id}.aivis-camera.ai`
+
+---
+
+## Phase 4: Clone Image (nếu cần)
+
+Sử dụng phase này khi cần tạo "golden image" từ một Jetson đã setup hoàn chỉnh để flash sang các thiết bị khác. Quy trình sẽ xóa thông tin/định danh riêng của thiết bị, zero-fill phần ổ trống (để `pigz` nén tốt hơn), rồi clone NVMe sang file nén trên USB SSD.
+
+> Tất cả lệnh chạy trực tiếp trên Jetson (qua màn hình + bàn phím hoặc SSH). Tất cả các bước cần `sudo`.
+
+### Yêu cầu
+
+- USB SSD đủ chỗ chứa file image nén (khuyến nghị ≥ 256GB)
+- Jetson đang boot từ NVMe cần clone
+- Đã hoàn tất setup (tất cả services OK qua `check-status.sh`)
+
+### Các bước thực hiện
+
+**Bước 1.** Stop tất cả services
+
+```bash
+sudo systemctl stop ai-core logic-service person-count-ws backchannel \
+                    stream-auth device-update-server cloudflared \
+                    go2rtc camera-stream 2>/dev/null
+```
+
+**Bước 2.** Xóa device identity & cloudflared state
+
+```bash
+sudo rm -f /etc/device/device.env /etc/device/config.json /etc/device/config.prev.json
+sudo systemctl stop cloudflared 2>/dev/null
+sudo cloudflared service uninstall 2>/dev/null
+sudo rm -f /etc/systemd/system/cloudflared.service
+sudo rm -rf /etc/cloudflared /var/lib/cloudflared /root/.cloudflared
+```
+
+> Xóa `DEVICE_ID`, `BACKEND_URL`, `SECRET_KEY` và credentials của cloudflared tunnel để image clone trở thành base generic. Mỗi thiết bị mới phải re-provision lại qua [Phase 1](#phase-1-tạo-camera-trên-aivis-admin) và [Phase 2](#phase-2-tạo-cloudflare-tunnel).
+
+**Bước 3.** Xóa runtime data
+
+```bash
+sudo rm -rf /data/mini-pc/db/* /data/mini-pc/media/* /data/mini-pc/faces/* /data/mini-pc/logs/*
+sudo rm -rf /detection/* /dev/shm/mini_pc_ai_frames.bin
+```
+
+**Bước 4.** Xóa logs & journal
+
+```bash
+sudo journalctl --rotate && sudo journalctl --vacuum-time=1s
+sudo rm -rf /var/log/*.log /var/log/*.gz /var/log/*.[0-9] /var/log/journal/*
+```
+
+**Bước 5.** Zero free space (giúp `pigz` nén tốt hơn 30–60%)
+
+```bash
+sudo dd if=/dev/zero of=/zero.fill bs=4M status=progress 2>/dev/null; sudo rm -f /zero.fill
+sync; sync
+```
+
+**Bước 6.** Mount USB SSD đích
+
+Cắm USB SSD, sau đó format và mount. **Chọn đúng tên device** bằng `lsblk` trước (ví dụ dưới dùng `sda1`).
+
+```bash
+sudo mkdir -p /mnt/backup
+sudo mkfs.ext4 -F /dev/sda1
+sudo mount /dev/sda1 /mnt/backup
+```
+
+> `mkfs.ext4 -F` sẽ xóa sạch dữ liệu trên `/dev/sda1`. Kiểm tra kỹ tên device để tránh format nhầm ổ.
+
+**Bước 7.** Clone NVMe sang file nén trên USB SSD
+
+**Chọn đúng tên ổ đĩa OS** bằng `lsblk` (thường là `nvme0n1`):
+
+```bash
+sudo bash -c "dd if=/dev/nvme0n1 bs=4M status=progress | pigz > /mnt/backup/jetson-base.img.gz"
+```
+
+**Bước 8.** Verify size
+
+```bash
+ls -lh /mnt/backup/jetson-base.img.gz
+```
+
+**Bước 9.** Unmount USB SSD
+
+```bash
+sudo umount /mnt/backup
+```
+
+File `jetson-base.img.gz` thu được có thể flash sang SSD mới bằng cùng lệnh ở [Phase 3 - Bước 2](#các-bước-thực-hiện-2).
 
 ---
 

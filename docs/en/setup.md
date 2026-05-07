@@ -1,12 +1,13 @@
 # Setup Guide
 
-The AIVIS Camera device setup consists of 3 phases:
+The AIVIS Camera device setup consists of 3 main phases (+ 1 optional):
 
 | Phase | Description | Performed on |
 |-------|-------------|--------------|
 | [Phase 1](#phase-1-create-camera-on-aivis-admin) | Create camera record on AIVIS Admin | AIVIS Admin Web |
 | [Phase 2](#phase-2-create-cloudflare-tunnel) | Create Cloudflare Tunnel and update domain/token | Cloudflare Dashboard + AIVIS Admin |
 | [Phase 3](#phase-3-install-and-configure-jetson-device) | Install software on Jetson | Jetson Orin Nano (direct access) |
+| [Phase 4](#phase-4-clone-image-if-needed) *(optional)* | Clone NVMe to a reusable golden image | Jetson Orin Nano |
 
 ---
 
@@ -167,9 +168,11 @@ In the "Install and run a connector" popup, copy the token from the command `clo
 
 **Step 1.** Download the system image
 
-Download the system image from the link in the project sheet.
+Download the system image from the following link:
 
-> Download link for image, backend domain, default account credentials, etc. are stored in the project sheet. Contact the project manager if you don't have access.
+[jetson-base.img.gz](https://dehasoftvn-my.sharepoint.com/:u:/r/personal/administrator_deha-soft_com/Documents/DEHA%20group/02.%20BOM/02.%20Head%20Office/01.%20JMU/05.%20JMU%20-%20Projects%20(B%E1%BA%A3o%20m%E1%BA%ADt)/TIMIMA01/05%20-%20Release/%E7%B4%8D%E5%93%81%E7%89%A9/Jetson%20Orin%20Nano%E7%94%A8%20%E3%82%BB%E3%83%83%E3%83%88%E3%82%A2%E3%83%83%E3%83%97%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/jetson-base.img.gz?csf=1&web=1&e=kbVSfc)
+
+> Contact the project manager if you don't have access to the link above.
 
 **Step 2.** Write the image to the SSD
 
@@ -337,6 +340,97 @@ After successful setup:
 - `device-update.py` sends heartbeat (software version) every 5 minutes
 - Camera status on AIVIS Admin changes to **Online**
 - Live stream accessible at: `https://{device-id}.aivis-camera.ai`
+
+---
+
+## Phase 4: Clone Image (if needed)
+
+Use this phase when you want to capture a "golden" image from a fully configured Jetson and reuse it to flash other devices. The flow wipes device-specific identity/state, zeroes free space (so `pigz` can compress better), then clones the NVMe to a compressed file on an external USB SSD.
+
+> Run all commands directly on the Jetson (via monitor + keyboard or SSH). All steps require `sudo`.
+
+### Requirements
+
+- USB SSD large enough to hold the compressed image (recommended ≥ 256GB)
+- Jetson booted from the NVMe you want to clone
+- All setup work already finished (services healthy via `check-status.sh`)
+
+### Steps
+
+**Step 1.** Stop all services
+
+```bash
+sudo systemctl stop ai-core logic-service person-count-ws backchannel \
+                    stream-auth device-update-server cloudflared \
+                    go2rtc camera-stream 2>/dev/null
+```
+
+**Step 2.** Wipe device identity & cloudflared state
+
+```bash
+sudo rm -f /etc/device/device.env /etc/device/config.json /etc/device/config.prev.json
+sudo systemctl stop cloudflared 2>/dev/null
+sudo cloudflared service uninstall 2>/dev/null
+sudo rm -f /etc/systemd/system/cloudflared.service
+sudo rm -rf /etc/cloudflared /var/lib/cloudflared /root/.cloudflared
+```
+
+> Removes `DEVICE_ID`, `BACKEND_URL`, `SECRET_KEY`, and the cloudflared tunnel credentials so the cloned image becomes a generic base. Each new device must be re-provisioned in [Phase 1](#phase-1-create-camera-on-aivis-admin) and [Phase 2](#phase-2-create-cloudflare-tunnel).
+
+**Step 3.** Wipe runtime data
+
+```bash
+sudo rm -rf /data/mini-pc/db/* /data/mini-pc/media/* /data/mini-pc/faces/* /data/mini-pc/logs/*
+sudo rm -rf /detection/* /dev/shm/mini_pc_ai_frames.bin
+```
+
+**Step 4.** Clear logs & journal
+
+```bash
+sudo journalctl --rotate && sudo journalctl --vacuum-time=1s
+sudo rm -rf /var/log/*.log /var/log/*.gz /var/log/*.[0-9] /var/log/journal/*
+```
+
+**Step 5.** Zero out free space (improves `pigz` compression by 30–60%)
+
+```bash
+sudo dd if=/dev/zero of=/zero.fill bs=4M status=progress 2>/dev/null; sudo rm -f /zero.fill
+sync; sync
+```
+
+**Step 6.** Mount the destination USB SSD
+
+Plug in the USB SSD, then format and mount it. **Pick the correct device name** with `lsblk` first (example below uses `sda1`).
+
+```bash
+sudo mkdir -p /mnt/backup
+sudo mkfs.ext4 -F /dev/sda1
+sudo mount /dev/sda1 /mnt/backup
+```
+
+> `mkfs.ext4 -F` will erase everything on `/dev/sda1`. Double-check the device name to avoid wiping the wrong disk.
+
+**Step 7.** Clone NVMe to a compressed file on the USB SSD
+
+**Pick the correct OS disk name** with `lsblk` (typically `nvme0n1`):
+
+```bash
+sudo bash -c "dd if=/dev/nvme0n1 bs=4M status=progress | pigz > /mnt/backup/jetson-base.img.gz"
+```
+
+**Step 8.** Verify the image size
+
+```bash
+ls -lh /mnt/backup/jetson-base.img.gz
+```
+
+**Step 9.** Unmount the USB SSD
+
+```bash
+sudo umount /mnt/backup
+```
+
+The resulting `jetson-base.img.gz` can be flashed onto a new SSD via the same command shown in [Phase 3 - Step 2](#steps-2).
 
 ---
 
