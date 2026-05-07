@@ -4,7 +4,7 @@ Hướng dẫn chạy thử pipeline AI Core và chuyển đổi (export) model 
 
 | Mục | Mô tả |
 |-----|-------|
-| [Chạy test AI Core](#chạy-test-ai-core) | Chạy pipeline nhận diện khuôn mặt từ webcam |
+| [Chạy test AI Core](#chạy-test-ai-core) | Chạy pipeline nhận diện khuôn mặt từ camera |
 | [Export model `.pt` → `.engine`](#export-model-pt--engine) | Convert YOLO `.pt` sang TensorRT `.engine` (FP16/INT8) |
 
 ---
@@ -17,10 +17,6 @@ Pipeline nhận diện người (YOLO) + tracking (ByteTrack) + nhận diện kh
 
 ```bash
 cd src/ai_core
-
-# Tạo virtual environment
-python3 -m venv venv
-source venv/bin/activate
 
 # Cài đặt dependencies
 pip install -r requirements.txt
@@ -45,24 +41,8 @@ FACE_DB_PATH=logic_service/logic_service.db
 ### Lệnh chạy test
 
 ```bash
-# Chạy cơ bản với webcam (camera index 0)
-python main.py --source 0
-```
-
-Một số ví dụ khác:
-
-```bash
 # Chạy với CUDA (Jetson)
-python main.py --source 0 --device cuda
-
-# Chạy với video file
-python main.py --source video.mp4 --device cuda
-
-# Tinh chỉnh threshold matching khuôn mặt (0.0 - 1.0, mặc định 0.45)
-python main.py --source 0 --threshold 0.5
-
-# Giảm độ phân giải để chạy nhanh hơn trên CPU
-python main.py --source 0 --cam_width 640 --cam_height 480
+python main.py --device cuda
 ```
 
 Phím điều khiển:
