@@ -18,6 +18,7 @@ The system processes video streams locally with CUDA-accelerated AI models (YOLO
 |---|---------|--------|------------|
 | Architecture | [docs/en/architecture.md](docs/en/architecture.md) | [docs/ja/architecture.md](docs/ja/architecture.md) | - |
 | Setup | [docs/en/setup.md](docs/en/setup.md) | [docs/ja/setup.md](docs/ja/setup.md) | [docs/vi/setup.md](docs/vi/setup.md) |
+| AI Core Setup | - | - | [docs/vi/ai-core.md](docs/vi/ai-core.md) |
 
 ### Architecture
 
